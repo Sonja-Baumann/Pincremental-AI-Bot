@@ -220,17 +220,23 @@ class CDPClientTests(unittest.TestCase):
         self.assertIn('(\"balanced\", 0)', expression)
         client.close(release=False)
 
-    def test_upgrade_purchase_is_limited_to_allowlisted_non_reset_shops(self):
+    def test_upgrade_purchase_covers_game_shops_and_excludes_real_money_controls(self):
         for popup in (
             "#PointPopup", "#TicketPopup", "#ArcadePopup", "#CompanyPopup",
             "#InvestorPopup", "#WizardPopup",
         ):
             with self.subTest(popup=popup):
                 self.assertIn(popup, BUY_AVAILABLE_UPGRADE)
-        for unsafe_id in ("'NewGame'", "'AutoCash'", "'AutoShares'", "'AutoCompanies'",
-                          "'AutoInvestors'", "'AutoPaddles'"):
-            with self.subTest(unsafe_id=unsafe_id):
-                self.assertNotIn(unsafe_id, BUY_AVAILABLE_UPGRADE)
+        for in_game_action in (
+            "button#Prestige", "button#EquityPrestige", "button#BuyCompany",
+            "button#BuyInvestor", "button#BuyWizard", "button.InvestorUpgrade",
+            "button.CompanyUpgrade", "button.WizardUpgrade",
+        ):
+            with self.subTest(in_game_action=in_game_action):
+                self.assertIn(in_game_action, BUY_AVAILABLE_UPGRADE)
+        for real_money_control in (".Donation", ".GoldDonation", "#BuyGold"):
+            with self.subTest(real_money_control=real_money_control):
+                self.assertNotIn(real_money_control, BUY_AVAILABLE_UPGRADE)
         self.assertIn("if (!button || button.disabled) continue", BUY_AVAILABLE_UPGRADE)
 
     def test_invalid_ball_coordinates_are_rejected(self):

@@ -165,29 +165,17 @@ DISABLE_AUTO_PADDLES = r"""(function() {
   return !!toggle;
 })()"""
 BUY_AVAILABLE_UPGRADE = r"""(function(strategy, cursor) {
-  // Explicit allowlists omit resets, donations, built-in auto paddles, and
-  // upgrades that enable or preserve automatic prestige actions.
   var groups = [
-    { key: 'machine', root: '#PointPopup', cls: 'Upgrade',
-      ids: ['HSM1', 'HSM2', 'HSM3', 'HSM4', 'HSM5',
-            'CSM1', 'CSM2', 'CSM3', 'CSM4', 'CSM5', 'Doubler'] },
-    { key: 'ticket', root: '#TicketPopup', cls: 'Upgrade',
-      ids: ['Tripler', 'CSE1', 'CSE2', 'CSE3', 'CSE4', 'CSE5',
-            'MultiplierZones', 'EL1', 'EL2', 'SideBlockers'] },
-    { key: 'arcade', root: '#ArcadePopup', cls: 'Upgrade',
-      ids: ['MoneyPoints', 'aDoubler', 'aHSM', 'aCSM', 'aTripler', 'aCSE',
-            'aMultiplierZones', 'aEL', 'aSideBlockers'] },
-    { key: 'company', root: '#CompanyPopup', cls: 'CompanyUpgrade',
-      ids: ['CompanyPoints', 'PermaDoubler', 'PermaHSM', 'PermaCSM',
-            'PermaTripler', 'PermaCSE', 'PermaMultiplierZones',
-            'PermaEL', 'PermaSideBlockers'] },
-    { key: 'investor', root: '#InvestorPopup', cls: 'InvestorUpgrade',
-      ids: ['CardTransM', 'InvestorIncomeMulti', 'InvestorMulti', 'HSE',
-            'RetainBasicPermas', 'RetainMultiplierZones', 'RetainSideBlockers',
-            'StoreMulti', 'CompMulti', 'PermaFirstSpin', 'PermaAutoArcade'] },
-    { key: 'wizard', root: '#WizardPopup', cls: 'WizardUpgrade',
-      ids: ['WizardFavorMulti', 'PointMana', 'TicketMana', 'LifetimeMulti',
-            'MultiZoneMulti', 'PermaScore', 'RetainUpMultis', 'RetainAutoMultis'] }
+    { key: 'machine', root: '#PointPopup', buttons: 'button.Upgrade' },
+    { key: 'ticket', root: '#TicketPopup', buttons: 'button.Upgrade, button#Prestige' },
+    { key: 'arcade', root: '#ArcadePopup',
+      buttons: 'button.Upgrade, button#BuyStore, button#EquityPrestige' },
+    { key: 'company', root: '#CompanyPopup',
+      buttons: 'button.CompanyUpgrade, button#BuyCompany' },
+    { key: 'investor', root: '#InvestorPopup',
+      buttons: 'button.InvestorUpgrade, button#BuyInvestor' },
+    { key: 'wizard', root: '#WizardPopup',
+      buttons: 'button.WizardUpgrade, button#BuyWizard' }
   ];
   var fixedOrders = {
     'machine-first': ['machine', 'ticket', 'arcade', 'company', 'investor', 'wizard'],
@@ -208,7 +196,8 @@ BUY_AVAILABLE_UPGRADE = r"""(function(strategy, cursor) {
   } else {
     order = fixedOrders[strategy] || fixedOrders['machine-first'];
   }
-  var machineIds = groups[0].ids;
+  var machineIds = ['HSM1', 'HSM2', 'HSM3', 'HSM4', 'HSM5',
+                    'CSM1', 'CSM2', 'CSM3', 'CSM4', 'CSM5', 'Doubler'];
   if (strategy === 'high-score-first') {
     machineIds = ['HSM1', 'HSM2', 'HSM3', 'HSM4', 'HSM5',
                   'Doubler', 'CSM1', 'CSM2', 'CSM3', 'CSM4', 'CSM5'];
@@ -225,11 +214,26 @@ BUY_AVAILABLE_UPGRADE = r"""(function(strategy, cursor) {
       if (groups[i].key === order[o]) { group = groups[i]; break; }
     }
     if (!group) continue;
-    var ids = group.key === 'machine' ? machineIds : group.ids;
-    for (var j = 0; j < ids.length; j++) {
-      var id = ids[j];
-      var button = document.querySelector(group.root + ' button.' + group.cls + '#' + id);
+    var panel = document.querySelector(group.root);
+    if (!panel) continue;
+    var buttons = panel.querySelectorAll(group.buttons);
+    var candidates = [];
+    if (group.key === 'machine') {
+      for (var j = 0; j < machineIds.length; j++) {
+        for (var m = 0; m < buttons.length; m++) {
+          if (buttons[m].id === machineIds[j]) { candidates.push(buttons[m]); break; }
+        }
+      }
+      for (m = 0; m < buttons.length; m++) {
+        if (candidates.indexOf(buttons[m]) < 0) candidates.push(buttons[m]);
+      }
+    } else {
+      for (var n = 0; n < buttons.length; n++) candidates.push(buttons[n]);
+    }
+    for (var k = 0; k < candidates.length; k++) {
+      var button = candidates[k];
       if (!button || button.disabled) continue;
+      var id = button.id || button.textContent.trim();
       if (group.key === 'arcade' && id.charAt(0) === 'a') {
         var hireLabel = button.querySelector('.HireFire');
         if (!hireLabel || hireLabel.textContent.replace(/\s/g, '').toLowerCase() !== 'hire') continue;
@@ -239,16 +243,6 @@ BUY_AVAILABLE_UPGRADE = r"""(function(strategy, cursor) {
         ? (cursor + 1) % groups.length
         : (groups.indexOf(group) + 1) % groups.length;
       return { store: group.key, upgrade: id, next_cursor: nextCursor };
-    }
-    if (group.key === 'arcade') {
-      var storeButton = document.querySelector('#ArcadePopup button.BuyStoreButton#BuyStore');
-      if (storeButton && !storeButton.disabled) {
-        storeButton.click();
-        var nextStoreCursor = strategy === 'balanced'
-          ? (cursor + 1) % groups.length
-          : (groups.indexOf(group) + 1) % groups.length;
-        return { store: group.key, upgrade: 'BuyStore', next_cursor: nextStoreCursor };
-      }
     }
   }
   return null;

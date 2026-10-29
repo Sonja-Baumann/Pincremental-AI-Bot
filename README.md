@@ -45,9 +45,17 @@ Learning data, configuration, and JSONL session logs use XDG locations by defaul
 
 An existing `~/.pincremental_bot.json` is copied to the new learning-data location on first run and left intact. Set options in the config JSON or override them on the command line; run `pincremental-ai-bot --help` for the available flags. Use `--dry-run` to observe and log suggested actions without pressing flippers. `--no-ui` runs without the dashboard; `--no-launch` attaches only to an already-debuggable game.
 
-Automatic upgrade purchases are disabled by default. Enable them with `--auto-upgrades` or the config key `"auto_upgrades": true`; turn them off with `--no-auto-upgrades` or `"auto_upgrades": false`. They cover direct purchases in the Machine Upgrades, Ticket Shop, Arcade Ownership, Company, Investor, and Wizard menus. The bot buys at most one enabled upgrade every three seconds through the game's own button handlers. It skips cash-outs, prestige/reset actions, New Game+, donations, built-in auto paddles, and upgrades that enable or preserve automatic prestige actions.
+Automatic game purchases are disabled by default. Enable them with `--auto-upgrades` or the config key `"auto_upgrades": true`; turn them off with `--no-auto-upgrades` or `"auto_upgrades": false`. They cover enabled purchase and reset actions in the Machine Upgrades, Ticket Shop, Arcade Ownership, Company, Investor, and Wizard menus, including cash-outs, prestige/reset, New Game+, and in-game automation upgrades. The bot buys at most one enabled item every three seconds through the game's own button handlers. It never clicks donation, gold, or other real-money purchase controls. These actions can spend game currencies or reset progress.
 
-Choose `--upgrade-strategy balanced`, `machine-first`, `ticket-first`, `arcade-first`, or `permanent-first` (the config key is `"upgrade_strategy"`). `balanced` rotates through the six menus; the others choose a starting priority. `high-score-first`, `current-score-first`, and `doubler-first` are also available to order Machine Upgrades. This setting is independent of paddle control: `--dry-run` suppresses flipper presses but does not suppress explicitly enabled purchases, so purchases can spend points, tickets, or other in-game currencies. The dashboard pause control pauses both automation loops.
+Choose `--upgrade-strategy balanced`, `machine-first`, `ticket-first`, `arcade-first`, or `permanent-first` (the config key is `"upgrade_strategy"`). `balanced` rotates through the six menus; the others choose a starting priority. `high-score-first`, `current-score-first`, and `doubler-first` are also available to order Machine Upgrades. This setting is independent of paddle control: `--dry-run` suppresses flipper presses but does not suppress explicitly enabled purchases. The dashboard pause control pauses both automation loops.
+
+An opt-in live integration test makes one purchase in the running game and checks that its visible state changes. It may spend game currency or trigger a reset, so run it only when that is intended:
+
+```bash
+PINCREMENTAL_LIVE_TEST=1 .venv/bin/python -m pytest tests/test_live_game.py -q
+```
+
+It connects to the loopback CDP port (default `9222`); set `PINCREMENTAL_CDP_PORT` to use another port. The default strategy is `ticket-first`; override it with `PINCREMENTAL_UPGRADE_STRATEGY`.
 
 For development, install the extra tools and run the checks:
 

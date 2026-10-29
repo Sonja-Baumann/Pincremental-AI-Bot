@@ -294,8 +294,22 @@ class PincrementalClient:
         })
         exception = result.get("exceptionDetails")
         if exception:
-            text = exception.get("text") or exception.get("exception", {}).get("description") or "page evaluation failed"
-            raise PageEvaluationError(str(text))
+            remote = exception.get("exception") or {}
+            description = remote.get("description") if isinstance(remote, dict) else None
+            text = str(description or exception.get("text") or "page evaluation failed")
+            location = ""
+            stack = exception.get("stackTrace") or {}
+            frames = stack.get("callFrames", []) if isinstance(stack, dict) else []
+            if frames:
+                frame = frames[0]
+                if isinstance(frame, dict):
+                    url = str(frame.get("url") or "game page")
+                    line = int(frame.get("lineNumber", 0)) + 1
+                    column = int(frame.get("columnNumber", 0)) + 1
+                    location = f" at {url}:{line}:{column}"
+            if text == "Uncaught" and description:
+                text = str(description)
+            raise PageEvaluationError(f"JavaScript evaluation failed: {text}{location}")
         remote = result.get("result", {})
         if remote.get("subtype") == "error":
             raise PageEvaluationError(str(remote.get("description", "page evaluation failed")))

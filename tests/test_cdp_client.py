@@ -128,9 +128,15 @@ class CDPClientTests(unittest.TestCase):
     def test_evaluation_errors_are_reported(self):
         client, _socket, _calls = self.make_client([{
             "id": 1,
-            "result": {"exceptionDetails": {"text": "SyntaxError: invalid script"}},
+            "result": {"exceptionDetails": {
+                "text": "Uncaught",
+                "exception": {"description": "TypeError: test failure"},
+                "stackTrace": {"callFrames": [{
+                    "url": "file:///Pinball.html", "lineNumber": 8, "columnNumber": 2,
+                }]},
+            }},
         }])
-        with self.assertRaises(PageEvaluationError):
+        with self.assertRaisesRegex(PageEvaluationError, r"TypeError: test failure.*Pinball.html:9:3"):
             client.evaluate("broken()")
         client.close(release=False)
 

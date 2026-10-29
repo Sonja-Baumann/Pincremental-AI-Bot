@@ -155,6 +155,12 @@ class CDPClientTests(unittest.TestCase):
         self.assertIn("('left', false)", expressions[0])
         self.assertIn("('right', false)", expressions[1])
 
+    def test_close_game_uses_page_close_command(self):
+        client, socket, _calls = self.make_client([{"id": 1, "result": {}}])
+        client.close_game()
+        self.assertEqual(socket.sent[0]["method"], "Page.close")
+        client.close(release=False)
+
     def test_invalid_ball_coordinates_are_rejected(self):
         sample = {"ball": {"x": 1}, "hits": 1, "best": 1}
         client, _socket, _calls = self.make_client([{

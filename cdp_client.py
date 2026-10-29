@@ -393,6 +393,10 @@ class PincrementalClient:
     def disable_auto_paddles(self) -> None:
         self.evaluate("window.__pincrementalBotDisableAutoPaddles()")
 
+    def close_game(self) -> None:
+        """Close the Pincremental page; the Linux Electron app exits with its window."""
+        self.call("Page.close")
+
     def reconnect(self, timeout: float = 20.0, poll_interval: float = 0.4) -> None:
         """Re-discover the app page and attach again after a target restart."""
         self.close(release=False)

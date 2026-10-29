@@ -28,7 +28,6 @@ py-modules = [
     "bot_ui",
     "learning",
     "session_log",
-    "session_report",
     "simulation",
 ]
 

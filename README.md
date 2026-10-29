@@ -31,7 +31,7 @@ Or run the script directly:
 
 If Pincremental is already open without the bot interface, the script waits while you close **the game window only**. Press Enter in the terminal afterward; it will relaunch the game through Steam. No computer restart is needed. Stop the bot with **Ctrl+C**.
 
-The bot dismisses the offline progress dialog and turns off built-in auto paddles after connecting. Its status window can be moved and resized freely. Space pauses/resumes, **D** toggles dry-run mode, and **Esc** releases both paddles and stops the bot. Ctrl+C in the terminal also stops it safely.
+The bot dismisses the offline progress dialog and turns off built-in auto paddles after connecting. Its status window can be moved and resized freely. Space pauses/resumes, **D** toggles dry-run mode, and **Esc** releases both paddles and stops the bot. Ctrl+C in the terminal releases both paddles, waits for the game's autosave, then closes Pincremental.
 
 When you stop a connected session, the terminal prints a report with elapsed time, hits gained, best run record, hits per minute, lifetime high score, action outcomes, and the strongest learned timing for each side/speed context. It also shows the session log path. Timing rewards summarize attributed rebounds and score changes; they are not game points.
 

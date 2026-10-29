@@ -25,7 +25,6 @@ from cdp_client import (
 )
 from config import BotConfig
 from learning import ActionOutcomeTracker, ProgressSnapshot, ProgressTracker, TimingLearner
-from session_report import format_session_report
 from session_log import JsonlSessionLogger
 
 
@@ -34,6 +33,69 @@ RELEASE_SECONDS = 0.10
 ACTION_COOLDOWN = 0.28
 SAMPLE_SLEEP = 0.015
 BALL_DRAIN_Y = 790.0
+
+
+def _duration_text(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
+def _format_session_report(
+    *,
+    dry_run: bool,
+    duration_seconds: float,
+    hits_gained: int,
+    best_run_record: int,
+    lifetime_record: int,
+    hits_per_minute: float,
+    actions: int,
+    resolved_actions: int,
+    learner: TimingLearner,
+    log_path: Path,
+) -> str:
+    """Summarize this run and the highest-reward learned timing per context."""
+    lines = [
+        "",
+        "Session report",
+        f"Mode: {'Dry run' if dry_run else 'Live play'}",
+        f"Duration: {_duration_text(duration_seconds)}",
+        f"Hits gained: {max(0, int(hits_gained))}",
+        f"Best run record: {max(0, int(best_run_record))}",
+        f"Session rate: {max(0.0, float(hits_per_minute)):.1f} hits/min",
+        f"Lifetime high score: {max(0, int(lifetime_record))}",
+        f"Flipper suggestions: {max(0, int(actions))} ({max(0, int(resolved_actions))} outcomes)",
+        "Best learned timing by context (mean reward; cumulative):",
+    ]
+    contexts = learner.to_dict().get("contexts", {})
+    ranked: list[tuple[float, str, str, int]] = []
+    if isinstance(contexts, dict):
+        for context, arms in contexts.items():
+            if not isinstance(arms, dict):
+                continue
+            observed = [
+                (str(lead), arm)
+                for lead, arm in arms.items()
+                if isinstance(arm, dict) and int(arm.get("count", 0)) > 0
+            ]
+            if observed:
+                lead, arm = max(observed, key=lambda item: float(item[1].get("mean", 0.0)))
+                ranked.append((float(arm.get("mean", 0.0)), str(context), lead, int(arm["count"])))
+    ranked.sort(reverse=True)
+    if ranked:
+        lines.extend(
+            f"  {context}: {lead}s lead, mean reward {mean:+.2f} ({count} samples)"
+            for mean, context, lead, count in ranked[:3]
+        )
+    else:
+        lines.append("  No completed timing samples yet.")
+    lines.append(f"Session log: {log_path.expanduser()}")
+    return "\n".join(lines)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -240,6 +302,7 @@ def run_bot(
     best_run_record = 0
     total_actions = 0
     resolved_actions = 0
+    close_game_requested = False
     try:
         client = _connect_or_launch(config, no_launch=no_launch, timeout=launch_timeout)
         hook_deadline = time.monotonic() + 20
@@ -501,12 +564,22 @@ def run_bot(
 
     except KeyboardInterrupt:
         print("Stopping bot.")
+        close_game_requested = True
     finally:
         if client:
             try:
                 client.release_all()
             except CDPClientError as exc:
                 logger.log("release_failed", error=str(exc))
+            if close_game_requested:
+                # Pincremental autosaves every two seconds; wait before closing its Electron page.
+                time.sleep(2.1)
+                try:
+                    client.close_game()
+                    print("Closed Pincremental.", flush=True)
+                except CDPClientError as exc:
+                    logger.log("game_close_failed", error=str(exc))
+                    print(f"Could not close Pincremental automatically: {exc}", flush=True)
             client.close(release=False)
         _save_learning(config.state_path, learner)
         logger.log(
@@ -521,7 +594,7 @@ def run_bot(
         )
         logger.close()
         if session_start is not None:
-            print(format_session_report(
+            print(_format_session_report(
                 dry_run=dry_run,
                 duration_seconds=time.monotonic() - session_start,
                 hits_gained=progress.session_hits,

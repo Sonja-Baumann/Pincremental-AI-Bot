@@ -24,7 +24,7 @@ from cdp_client import (
     connect_pincremental,
 )
 from config import BotConfig
-from learning import ActionOutcomeTracker, ProgressTracker, TimingLearner
+from learning import ActionOutcomeTracker, ProgressSnapshot, ProgressTracker, TimingLearner
 from session_log import JsonlSessionLogger
 
 
@@ -202,6 +202,22 @@ def _ui_snapshot(
     }
 
 
+def _update_progress(
+    progress: ProgressTracker,
+    learner: TimingLearner,
+    hits: int,
+    current_record: int,
+    lifetime_record: int,
+    *,
+    now: float,
+) -> ProgressSnapshot:
+    """Update session counters and copy the tracked lifetime best to learning state."""
+    snapshot = progress.update(hits, current_record, lifetime_record, now=now)
+    learner.best_lifetime_record = snapshot.lifetime_record
+    learner.best_hits_per_minute = snapshot.best_hits_per_minute
+    return snapshot
+
+
 def run_bot(
     *,
     config: BotConfig,
@@ -330,12 +346,10 @@ def run_bot(
             side_guess = "left" if x < 250 else "right"
             progress_snapshot = None
             if hits is not None and current_record is not None:
-                progress_snapshot = progress.update(
-                    hits, current_record, lifetime_record, now=now
+                progress_snapshot = _update_progress(
+                    progress, learner, hits, current_record, lifetime_record, now=now
                 )
                 last_rate = progress_snapshot.session_hits_per_minute
-                learner.best_lifetime_record = progress_snapshot.best_lifetime_record
-                learner.best_hits_per_minute = progress_snapshot.best_hits_per_minute
 
             if sample.get("popup_visible") and "offline progress" in str(
                 sample.get("popup_title", "")

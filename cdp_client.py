@@ -161,6 +161,26 @@ DISABLE_AUTO_PADDLES = r"""(function() {
   if (toggle) toggle.click();
   return !!toggle;
 })()"""
+DISPATCH_PADDLE_KEY = r"""(function(side, down) {
+  var code = side === 'left' ? 37 : 39;
+  var jquery = window.jQuery || window.$;
+  if (!jquery && typeof window.require === 'function') {
+    try { jquery = window.require('jquery'); } catch (dependencyError) {}
+  }
+  if (jquery && jquery.Event) {
+    var jqueryEvent = jquery.Event(down ? 'keydown' : 'keyup', {
+      which: code, keyCode: code
+    });
+    jquery('body').trigger(jqueryEvent);
+    return true;
+  }
+  var event = document.createEvent('Event');
+  event.initEvent(down ? 'keydown' : 'keyup', true, true);
+  Object.defineProperty(event, 'which', { get: function() { return code; } });
+  Object.defineProperty(event, 'keyCode', { get: function() { return code; } });
+  document.body.dispatchEvent(event);
+  return true;
+})"""
 
 
 def is_pincremental_target(target: Mapping[str, Any]) -> bool:
@@ -403,7 +423,8 @@ class PincrementalClient:
         return side
 
     def press(self, side: str, down: bool) -> None:
-        self.evaluate("window.__pincrementalBotKey(%r, %s)" % (self._side(side), "true" if down else "false"))
+        expression = f"{DISPATCH_PADDLE_KEY}({json.dumps(self._side(side))}, {str(bool(down)).lower()})"
+        self.evaluate(expression)
 
     def press_paddle(self, side: str) -> None:
         self.press(side, True)

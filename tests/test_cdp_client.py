@@ -5,6 +5,7 @@ from cdp_client import (
     CDPProtocolError,
     DISABLE_AUTO_PADDLES,
     DISMISS_KNOWN_POPUP,
+    DISPATCH_PADDLE_KEY,
     GameInterface,
     INSTALL_HOOK,
     PageEvaluationError,
@@ -122,7 +123,10 @@ class CDPClientTests(unittest.TestCase):
             "id": 1, "result": {"result": {"type": "boolean", "value": True}}
         }])
         client.press("left", True)
-        self.assertIn("('left', true)", socket.sent[0]["params"]["expression"])
+        expression = socket.sent[0]["params"]["expression"]
+        self.assertIn('("left", true)', expression)
+        self.assertNotIn("window.__pincrementalBotKey", expression)
+        self.assertIn("dispatchEvent(event)", DISPATCH_PADDLE_KEY)
         with self.assertRaises(ValueError):
             client.press("middle", True)
         client.close(release=False)
@@ -160,8 +164,8 @@ class CDPClientTests(unittest.TestCase):
         client.close()
         self.assertTrue(socket.closed)
         expressions = [message["params"]["expression"] for message in socket.sent]
-        self.assertIn("('left', false)", expressions[0])
-        self.assertIn("('right', false)", expressions[1])
+        self.assertIn('("left", false)', expressions[0])
+        self.assertIn('("right", false)', expressions[1])
 
     def test_close_game_uses_page_close_command(self):
         client, socket, _calls = self.make_client([{"id": 1, "result": {}}])

@@ -59,7 +59,17 @@ class PageEvaluationError(CDPClientError):
 INSTALL_HOOK = r"""(function() {
   if (window.__pincrementalBotInstalled) return { ready: true, installed: true };
   if (document.readyState !== 'complete') return { ready: false, reason: 'page-loading' };
-  if (!window.Matter || !window.Matter.Engine || !window.Matter.Engine.update || !window.$) {
+  var botMatter = window.Matter;
+  var botJQuery = window.jQuery || window.$;
+  // Pincremental's Electron entry script imports both dependencies with
+  // require(), so some Chromium contexts do not expose them as window globals.
+  if (typeof window.require === 'function') {
+    try {
+      if (!botMatter) botMatter = window.require('matter-js');
+      if (!botJQuery) botJQuery = window.require('jquery');
+    } catch (dependencyError) {}
+  }
+  if (!botMatter || !botMatter.Engine || !botMatter.Engine.update || !botJQuery) {
     return { ready: false, unsupported: true, reason: 'Matter.js or jQuery missing' };
   }
   if (!document.querySelector('.container') ||
@@ -67,7 +77,7 @@ INSTALL_HOOK = r"""(function() {
       !document.querySelector('.high-score span')) {
     return { ready: false, unsupported: true, reason: 'Pincremental board selectors missing' };
   }
-  var engineApi = window.Matter.Engine;
+  var engineApi = botMatter.Engine;
   var originalUpdate = engineApi.update;
   engineApi.update = function() {
     var engine = arguments[0];
@@ -105,8 +115,8 @@ INSTALL_HOOK = r"""(function() {
   };
   window.__pincrementalBotKey = function(side, down) {
     var code = side === 'left' ? 37 : 39;
-    var event = window.$.Event(down ? 'keydown' : 'keyup', { which: code, keyCode: code });
-    window.$('body').trigger(event);
+    var event = botJQuery.Event(down ? 'keydown' : 'keyup', { which: code, keyCode: code });
+    botJQuery('body').trigger(event);
     return true;
   };
   window.__pincrementalBotDismissOffline = function() {
@@ -120,7 +130,7 @@ INSTALL_HOOK = r"""(function() {
     return '';
   };
   window.__pincrementalBotDisableAutoPaddles = function() {
-    window.$('.AutoPaddleToggle.Off').trigger('click');
+    botJQuery('.AutoPaddleToggle.Off').trigger('click');
     return true;
   };
   window.__pincrementalBotInstalled = true;
@@ -177,7 +187,12 @@ def discover_target(
             candidates = [item for item in targets if isinstance(item, dict) and is_pincremental_target(item)]
             if candidates:
                 # Prefer the actual Pinball board document over the generic shell page.
-                candidates.sort(key=lambda item: str(item.get("url", "")).casefold().endswith("/pinball.html"), reverse=True)
+                # The bundled game document is named ``Pinball.html`` with a
+                # capital P. Prefer it over the Electron shell's index page.
+                candidates.sort(
+                    key=lambda item: str(item.get("url", "")).casefold().endswith("/pinball.html"),
+                    reverse=True,
+                )
                 return candidates[0]
             last_error = None
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:

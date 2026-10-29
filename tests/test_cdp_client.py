@@ -170,6 +170,11 @@ class CDPClientTests(unittest.TestCase):
         self.assertNotIn("=>", INSTALL_HOOK)
         self.assertNotIn("...", INSTALL_HOOK)
 
+    def test_injected_hook_loads_game_modules_from_electron_require(self):
+        self.assertIn("window.require('matter-js')", INSTALL_HOOK)
+        self.assertIn("window.require('jquery')", INSTALL_HOOK)
+        self.assertIn("botMatter.Engine", INSTALL_HOOK)
+
 
 if __name__ == "__main__":
     unittest.main()

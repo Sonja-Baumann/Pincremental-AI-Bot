@@ -1,167 +1,121 @@
 #!/usr/bin/env python3
-"""Pincremental bot using the game's local Electron debugging interface.
+"""Control Pincremental through its loopback-only Electron debugging interface."""
 
-This avoids screen capture (which can be black under Wayland). The game is
-launched with a loopback-only Chromium debugging port; the bot reads the
-Matter.js ball state and sends paddle events into the game's own page.
-"""
+from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import math
 import shutil
 import subprocess
+import sys
 import time
-import urllib.request
+import uuid
 from pathlib import Path
+from typing import Any
 
-import websocket
+from cdp_client import (
+    CDPClientError,
+    CDPDisconnected,
+    CDPTimeout,
+    GameInterface,
+    TargetNotFound,
+    connect_pincremental,
+)
+from config import BotConfig
+from learning import ActionOutcomeTracker, ProgressTracker, TimingLearner
+from session_log import JsonlSessionLogger
 
 
-APP_ID = "1369470"
-DEBUG_PORT = 9222
 TARGET_Y = 662.0
-LEADS = (0.08, 0.12, 0.16, 0.20)
-STATE_FILE = Path.home() / ".pincremental_bot.json"
-
-INSTALL_HOOK = r"""(function() {
-  if (window.__pincrementalBotInstalled) return true;
-  if (!window.Matter || !window.Matter.Engine || !window.$) return false;
-  var engineApi = window.Matter.Engine;
-  var originalUpdate = engineApi.update;
-  engineApi.update = function() {
-    var engine = arguments[0];
-    var result = originalUpdate.apply(this, arguments);
-    var bodies = engine.world.bodies;
-    var ball = null;
-    for (var i = 0; i < bodies.length; i++) {
-      if (bodies[i].label === 'pinball') { ball = bodies[i]; break; }
-    }
-    if (ball) window.__pincrementalBotBall = {
-      x: ball.position.x, y: ball.position.y,
-      vx: ball.velocity.x, vy: ball.velocity.y,
-      time: performance.now()
-    };
-    return result;
-  };
-  window.__pincrementalBotRead = function() {
-    var ball = window.__pincrementalBotBall || null;
-    function number(selector) {
-      var element = document.querySelector(selector);
-      var value = element ? element.textContent.replace(/[^0-9]/g, '') : '';
-      return value ? Number(value) : null;
-    }
-    var titleElement = document.querySelector('#BasicPopup .PopTitle');
-    var holder = document.querySelector('.BasicPopHolder');
-    return {
-      ball: ball,
-      hits: number('.current-score span'),
-      best: number('.high-score span'),
-      title: titleElement ? titleElement.textContent.trim() : '',
-      popupVisible: !!holder && getComputedStyle(holder).display !== 'none'
-    };
-  };
-  window.__pincrementalBotKey = function(side, down) {
-    var code = side === 'left' ? 37 : 39;
-    var event = window.$.Event(down ? 'keydown' : 'keyup', { which: code, keyCode: code });
-    window.$('body').trigger(event);
-    return true;
-  };
-  window.__pincrementalBotDismissOffline = function() {
-    var titleElement = document.querySelector('#BasicPopup .PopTitle');
-    var title = titleElement ? titleElement.textContent.trim() : '';
-    if (/offline progress|^welcome!?$/i.test(title)) {
-      var button = document.querySelector('#BasicPopup .DonationHolder#PopConfirm button');
-      if (button) button.click();
-      return title;
-    }
-    return '';
-  };
-  window.__pincrementalBotDisableAutoPaddles = function() {
-    window.$('.AutoPaddleToggle.Off').trigger('click');
-    return true;
-  };
-  window.__pincrementalBotInstalled = true;
-  return true;
-})()"""
+RELEASE_SECONDS = 0.10
+ACTION_COOLDOWN = 0.28
+SAMPLE_SLEEP = 0.015
+BALL_DRAIN_Y = 790.0
 
 
-class CDP:
-    def __init__(self, ws_url, timeout=2):
-        self.ws = websocket.create_connection(ws_url, timeout=timeout, suppress_origin=True)
-        self.seq = 0
-
-    def call(self, method, params=None):
-        self.seq += 1
-        call_id = self.seq
-        self.ws.send(json.dumps({"id": call_id, "method": method, "params": params or {}}))
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            message = json.loads(self.ws.recv())
-            if message.get("id") != call_id:
-                continue
-            if "error" in message:
-                raise RuntimeError(message["error"].get("message", "DevTools command failed"))
-            return message.get("result", {})
-        raise TimeoutError(f"Timed out waiting for {method}")
-
-    def evaluate(self, expression):
-        response = self.call("Runtime.evaluate", {
-            "expression": expression,
-            "returnByValue": True,
-            "awaitPromise": True,
-        })
-        result = response.get("result", {})
-        if result.get("subtype") == "error":
-            raise RuntimeError(result.get("description", "Page evaluation failed"))
-        return result.get("value")
-
-    def close(self):
-        try:
-            self.ws.close()
-        except Exception:
-            pass
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Learn flipper timing and play Pincremental")
+    parser.add_argument("--config", type=Path, help="JSON config file (defaults to XDG config path)")
+    parser.add_argument("--app-id", help="Steam application ID")
+    parser.add_argument("--port", type=int, help="local Electron debugging port")
+    parser.add_argument("--state", type=Path, help="learning state JSON path")
+    parser.add_argument("--log", type=Path, help="session JSONL log path")
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=None,
+                        help="observe and recommend paddle actions without pressing them")
+    parser.add_argument("--play", dest="dry_run", action="store_false",
+                        help="override config and enable paddle control")
+    parser.add_argument("--no-launch", action="store_true",
+                        help="connect only; do not launch the game through Steam")
+    parser.add_argument("--no-ui", action="store_true", help="run without the status window")
+    parser.add_argument("--connect-timeout", type=float, default=45.0,
+                        help="seconds to wait for Steam's game page after launch")
+    return parser
 
 
-def debug_targets():
-    url = f"http://127.0.0.1:{DEBUG_PORT}/json/list"
-    with urllib.request.urlopen(url, timeout=0.5) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def find_game_target():
+def _load_learning(path: Path) -> dict[str, Any]:
     try:
-        targets = debug_targets()
-    except Exception:
-        return None
-    for target in targets:
-        if target.get("type") == "page" and target.get("webSocketDebuggerUrl"):
-            return target
-    return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Cannot read learning state {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"Learning state must be a JSON object: {path}")
+    return value
 
 
-def game_running():
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "ignore").lower()
-        except OSError:
-            continue
-        if "pincremental.exe" in command:
-            return True
+def _save_learning(path: Path, learner: TimingLearner) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(learner.to_dict(), indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _game_running() -> bool:
+    """Return whether a Pincremental executable appears in this user's proc list."""
+    try:
+        entries = Path("/proc").iterdir()
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(
+                    "utf-8", "ignore"
+                ).lower()
+            except OSError:
+                continue
+            if "pincremental.exe" in command:
+                return True
+    except OSError:
+        return False
     return False
 
 
-def start_steam_game():
+def build_steam_command(executable: str, app_id: str, port: int) -> list[str]:
+    """Build the Steam invocation used to enable this Electron bot session."""
+    if not str(app_id).isdigit():
+        raise ValueError("Steam app ID must contain only digits")
+    if not 1 <= int(port) <= 65535:
+        raise ValueError("debug port must be between 1 and 65535")
+    return [
+        executable,
+        "-applaunch",
+        str(app_id),
+        f"--remote-debugging-port={int(port)}",
+        "--remote-allow-origins=*",
+    ]
+
+
+def _launch_steam(app_id: str, port: int) -> None:
     steam = shutil.which("steam")
     if not steam:
-        raise RuntimeError("Steam command not found on PATH")
-    print("Launching Pincremental from Steam with local game-state access…")
+        raise RuntimeError("Steam command was not found on PATH. Start Steam, then run the bot again.")
+    command = build_steam_command(steam, app_id, port)
+    print(f"Launching Steam app {app_id} with local game-state access.", flush=True)
     subprocess.Popen(
-        [steam, "-applaunch", APP_ID,
-         f"--remote-debugging-port={DEBUG_PORT}",
-         "--remote-allow-origins=*"],
+        command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -169,136 +123,202 @@ def start_steam_game():
     )
 
 
-def wait_for_target(seconds):
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        target = find_game_target()
-        if target:
-            return target
-        time.sleep(0.5)
-    return None
-
-
-def read_state(path):
+def _connect_or_launch(config: BotConfig, *, no_launch: bool, timeout: float) -> GameInterface:
     try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-        if tuple(state.get("leads", ())) == LEADS:
-            return state
-    except (OSError, ValueError, TypeError):
+        return connect_pincremental(port=config.debug_port, timeout=0.8)
+    except TargetNotFound:
+        if no_launch:
+            raise RuntimeError(
+                f"No Pincremental page is exposed on 127.0.0.1:{config.debug_port}; "
+                "remove --no-launch to start it through Steam."
+            )
+
+    if _game_running():
+        print("Pincremental is open without the bot interface.")
+        print("Close only the game window, then press Enter here. The bot will relaunch it.")
+        if not sys.stdin.isatty():
+            raise RuntimeError("Close Pincremental and rerun the bot so Steam can enable its local interface.")
+        input()
+        deadline = time.monotonic() + 120.0
+        while _game_running() and time.monotonic() < deadline:
+            time.sleep(0.5)
+        if _game_running():
+            raise RuntimeError("Pincremental is still running; close its window and try again.")
+        time.sleep(2.1)  # Pincremental autosaves every two seconds.
+
+    _launch_steam(config.app_id, config.debug_port)
+    try:
+        return connect_pincremental(port=config.debug_port, timeout=timeout)
+    except TargetNotFound as exc:
+        raise RuntimeError(
+            f"Steam did not expose a Pincremental page on 127.0.0.1:{config.debug_port} "
+            f"within {timeout:g}s. Check the Steam launch and game version. ({exc})"
+        ) from exc
+
+
+def _recover_connection(client: GameInterface, logger: JsonlSessionLogger, error: Exception) -> None:
+    """Release controls best-effort and reattach to a restarted Electron page."""
+    try:
+        client.release_all()
+    except CDPClientError:
         pass
+    logger.log("connection_lost", error=str(error))
+    client.reconnect(timeout=20.0)
+    client.dismiss_known_popup()
+    client.disable_auto_paddles()
+    logger.log("reconnected", target=client.target_info)
+
+
+def _ui_snapshot(
+    *,
+    status: str,
+    ball: dict[str, float] | None,
+    velocity: dict[str, float] | None,
+    hits: int | None,
+    current_record: int | None,
+    lifetime_record: int,
+    score_rate: float,
+    action: str,
+    lead: float | None,
+    learner: TimingLearner,
+    side: str,
+    speed: float | None,
+    paused: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
     return {
-        "leads": list(LEADS),
-        "trials": {str(lead): 0 for lead in LEADS},
-        "values": {str(lead): 0.0 for lead in LEADS},
-        "best_record": 0,
-        "runs": 0,
-        "sessions": 0,
-        "best_hits_per_minute": 0.0,
+        "status": status,
+        "ball": ball,
+        "velocity": velocity,
+        "hits": hits,
+        "run_record": current_record,
+        "lifetime_record": lifetime_record,
+        "score_per_minute": score_rate,
+        "action": action,
+        "lead": lead,
+        "timings": learner.summary(side, speed),
+        "paused": paused,
+        "dry_run": dry_run,
     }
 
 
-def save_state(path, state):
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    temp.replace(path)
-
-
-def select_lead(state):
-    # Explore timings occasionally; otherwise prefer the timing with better results.
-    import random
-    if random.random() < 0.15:
-        return random.choice(LEADS)
-    return max(LEADS, key=lambda lead: (
-        state["values"][str(lead)] + 0.35 / math.sqrt(1 + state["trials"][str(lead)])
-    ))
-
-
-def train_result(state, lead, reward, path):
-    key = str(lead)
-    count = state["trials"][key] + 1
-    state["values"][key] += (reward - state["values"][key]) / count
-    state["trials"][key] = count
-    save_state(path, state)
-
-
-def main():
-    global DEBUG_PORT
-    parser = argparse.ArgumentParser(description="Play Pincremental with learned flipper timing")
-    parser.add_argument("--state", type=Path, default=STATE_FILE, help="persistent learning data")
-    parser.add_argument("--port", type=int, default=DEBUG_PORT, help="local Electron debugging port")
-    args = parser.parse_args()
-    DEBUG_PORT = args.port
-
-    target = find_game_target()
-    if not target:
-        if game_running():
-            print("Pincremental is open without bot access.")
-            print("Close only the Pincremental window normally, wait for it to exit, then press Enter here.")
-            input()
-            deadline = time.monotonic() + 120
-            while game_running() and time.monotonic() < deadline:
-                time.sleep(0.5)
-            if game_running():
-                raise SystemExit("Pincremental is still running; close its window and try again.")
-            time.sleep(2)  # the game autosaves every two seconds
-        start_steam_game()
-        target = wait_for_target(45)
-    if not target:
-        raise SystemExit(
-            "Steam did not expose the local game interface. Close Pincremental and run this script again; "
-            "the app must be launched by this script with the debugging switch."
-        )
-
-    client = CDP(target["webSocketDebuggerUrl"])
-    state = read_state(args.state)
+def run_bot(
+    *,
+    config: BotConfig,
+    no_launch: bool = False,
+    launch_timeout: float = 45.0,
+    no_ui: bool = False,
+) -> None:
+    config.ensure_directories()
+    config.save()
+    learner = TimingLearner.from_dict(_load_learning(config.state_path))
+    progress = ProgressTracker.from_dict(learner.to_dict())
+    logger = JsonlSessionLogger(config.log_path)
+    ui: StatusWindow | None = None
+    client: GameInterface | None = None
+    last_sample: dict[str, Any] = {}
     try:
-        ready = False
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            ready = client.evaluate(INSTALL_HOOK)
-            if ready:
-                break
-            time.sleep(0.25)
-        if not ready:
-            raise SystemExit("Could not attach to Matter.js in the game page.")
+        client = _connect_or_launch(config, no_launch=no_launch, timeout=launch_timeout)
+        hook_deadline = time.monotonic() + 20
+        while not client.install_hook():
+            if time.monotonic() >= hook_deadline:
+                raise RuntimeError("Pincremental's physics page did not finish loading the bot hook.")
+            time.sleep(0.2)
+        popup = client.dismiss_known_popup()
+        if popup:
+            logger.log("popup_dismissed", title=popup)
+            print(f"Dismissed {popup} popup.")
+        client.disable_auto_paddles()
+        client.release_all()
 
-        closed = client.evaluate("window.__pincrementalBotDismissOffline()")
-        if closed:
-            print(f"Dismissed {closed} popup.")
-        client.evaluate("window.__pincrementalBotDisableAutoPaddles()")
+        if not no_ui:
+            try:
+                from bot_ui import StatusWindow
 
-        print("Connected to Pincremental. Window position and size are yours to choose.")
-        print("Press Ctrl+C in this terminal to stop the bot.")
-        state["sessions"] = state.get("sessions", 0) + 1
-        session_start = time.monotonic()
-        previous = None
+                ui = StatusWindow(dry_run=config.dry_run)
+            except (ImportError, RuntimeError) as exc:
+                print(f"Status window unavailable; using terminal controls: {exc}")
+
+        outcomes = ActionOutcomeTracker(learner, logger=logger)
+        dry_run = config.dry_run
+        paused = False
+        stop_requested = False
+        previous: tuple[float, float, float] | None = None
+        last_ball_log = 0.0
         last_status = 0.0
-        last_key = None
-        release_at = 0.0
         last_action = 0.0
-        action_lead = 0.12
-        pending = None
-        hits_at_start = None
-        best_at_start = None
-        top_record = state.get("best_record", 0)
+        action_lead: float | None = None
+        planned_action: tuple[str, float, float] | None = None
+        action_label = "observing"
+        armed = True
+        last_key: str | None = None
+        release_at = 0.0
+        pending_actions: dict[str, float] = {}
+        session_start = time.monotonic()
+        last_sample: dict[str, Any] = {}
+        last_rate = 0.0
+        last_side = "left"
+        last_speed: float | None = None
+        reconnect_delay = 1.0
+        print("Connected to Pincremental. Window position and size are yours to choose.")
+        print("Use the status window to pause, emergency-stop, or toggle dry-run; Ctrl+C also stops.")
+        logger.log("session_ready", target=client.target_info, dry_run=dry_run)
 
-        while True:
+        while not stop_requested:
             now = time.monotonic()
-            sample = client.evaluate("window.__pincrementalBotRead()")
-            if not sample or not sample.get("ball"):
-                time.sleep(0.03)
+            if ui:
+                for command in ui.poll_commands():
+                    if command == "pause_toggle":
+                        paused = not paused
+                        action_label = "paused" if paused else "resumed"
+                        if paused:
+                            client.release_all()
+                            last_key = None
+                    elif command == "emergency_stop" or command == "stop":
+                        try:
+                            client.release_all()
+                        except CDPClientError:
+                            pass
+                        last_key = None
+                        stop_requested = True
+                        action_label = "emergency stop" if command == "emergency_stop" else "stopped"
+                    elif command.startswith("dry_run:"):
+                        dry_run = command.split(":", 1)[1].strip().lower() == "true"
+                        config = replace(config, dry_run=dry_run)
+                        config.save()
+                        action_label = "dry run on" if dry_run else "live control on"
+
+            if stop_requested:
+                break
+
+            try:
+                sample = client.read_state()
+            except (CDPDisconnected, CDPTimeout) as exc:
+                last_key = None
+                action_label = "reconnecting"
+                print(f"Game connection lost: {exc}; reconnecting…", flush=True)
+                try:
+                    _recover_connection(client, logger, exc)
+                    reconnect_delay = 1.0
+                    previous = None
+                    print("Reconnected to Pincremental.", flush=True)
+                except CDPClientError as reconnect_error:
+                    logger.log("reconnect_failed", error=str(reconnect_error))
+                    time.sleep(reconnect_delay)
+                    reconnect_delay = min(10.0, reconnect_delay * 1.8)
                 continue
-            ball = sample["ball"]
-            x, y = float(ball["x"]), float(ball["y"])
-            hits, best = sample.get("hits"), sample.get("best")
-            if hits is not None:
-                hits = int(hits)
-            if best is not None:
-                best = int(best)
-            if hits_at_start is None and hits is not None:
-                hits_at_start = hits
-            if best_at_start is None and best is not None:
-                best_at_start = best
+
+            if sample is None or sample.get("ball") is None:
+                time.sleep(SAMPLE_SLEEP)
+                continue
+            ball_state = sample["ball"]
+            x, y = float(ball_state["x"]), float(ball_state["y"])
+            hits = sample.get("hits")
+            current_record = sample.get("best")
+            lifetime_record = sample.get("lifetime_best") or 0
+            hits = int(hits) if hits is not None else None
+            current_record = int(current_record) if current_record is not None else None
+            lifetime_record = int(lifetime_record)
 
             vx = vy = 0.0
             if previous:
@@ -306,73 +326,190 @@ def main():
                 if 0.005 < dt < 0.25:
                     vx = (x - previous[0]) / dt
                     vy = (y - previous[1]) / dt
+            speed = math.hypot(vx, vy)
+            side_guess = "left" if x < 250 else "right"
+            progress_snapshot = None
+            if hits is not None and current_record is not None:
+                progress_snapshot = progress.update(
+                    hits, current_record, lifetime_record, now=now
+                )
+                last_rate = progress_snapshot.session_hits_per_minute
+                learner.best_lifetime_record = progress_snapshot.best_lifetime_record
+                learner.best_hits_per_minute = progress_snapshot.best_hits_per_minute
 
-            if sample.get("popupVisible") and "offline progress" in sample.get("title", "").lower():
-                client.evaluate("window.__pincrementalBotDismissOffline()")
+            if sample.get("popup_visible") and "offline progress" in str(
+                sample.get("popup_title", "")
+            ).lower():
+                try:
+                    dismissed = client.dismiss_known_popup()
+                except (CDPDisconnected, CDPTimeout) as exc:
+                    _recover_connection(client, logger, exc)
+                    previous = None
+                    continue
+                if dismissed:
+                    logger.log("popup_dismissed", title=dismissed)
 
             if last_key and now >= release_at:
-                client.evaluate(f"window.__pincrementalBotKey('{last_key}', false)")
+                try:
+                    client.release_paddle(last_key)
+                except (CDPDisconnected, CDPTimeout) as exc:
+                    _recover_connection(client, logger, exc)
+                    previous = None
+                    last_key = None
+                    continue
                 last_key = None
 
-            if pending:
-                old_hits = pending.get("hits")
-                if hits is not None and old_hits is not None and hits > old_hits:
-                    elapsed = max(5.0, now - session_start)
-                    rate = max(0, hits - (hits_at_start or 0)) * 60 / elapsed
-                    pending["reward"] += (hits - old_hits) * (1.0 + 0.02 * rate)
-                    pending["hits"] = hits
-                if best is not None and best > top_record:
-                    top_record = best
-                    state["best_record"] = max(state.get("best_record", 0), best)
-                    elapsed = max(5.0, now - session_start)
-                    rate = max(0, (hits or 0) - (hits_at_start or 0)) * 60 / elapsed
-                    pending["reward"] += 10.0 + 0.1 * rate
-                if now - pending["time"] > 0.55 and vy < -10:
-                    pending["reward"] += 1.0
-                    train_result(state, pending["lead"], pending["reward"], args.state)
-                    pending = None
-                elif now - pending["time"] > 1.5:
-                    pending["reward"] -= 3.0
-                    train_result(state, pending["lead"], pending["reward"], args.state)
-                    pending = None
+            # Detect a reset teleport to the launch lane; the game drains the
+            # ball and relaunches it at x≈465, y≈765 within one physics frame.
+            drained = bool(
+                previous
+                and y > 740
+                and abs(x - previous[0]) > 140
+                and (x > 420 or x < 30)
+            )
+            for action_id, action_started in list(pending_actions.items()):
+                rebound = now > action_started and vy < -30
+                outcome = outcomes.observe(
+                    action_id,
+                    hits=hits,
+                    record=current_record,
+                    lifetime_record=lifetime_record,
+                    rebound=rebound,
+                    drained=drained,
+                    score_rate=last_rate,
+                    now=now,
+                )
+                if outcome:
+                    logger.log("policy_update", action_id=outcome.action_id,
+                               side=outcome.side, lead=outcome.lead,
+                               reward=outcome.reward, score_delta=outcome.score_delta,
+                               record_delta=outcome.record_delta,
+                               lifetime_record_delta=outcome.lifetime_record_delta,
+                               samples=learner.summary(outcome.side, outcome.speed))
+                    pending_actions.pop(action_id, None)
+                    _save_learning(config.state_path, learner)
+                    action_label = f"{outcome.side} result {outcome.reward:+.1f}"
+            for outcome in outcomes.expire(now=now):
+                logger.log("policy_update", action_id=outcome.action_id,
+                           side=outcome.side, lead=outcome.lead,
+                           reward=outcome.reward, score_delta=outcome.score_delta,
+                           record_delta=outcome.record_delta,
+                           lifetime_record_delta=outcome.lifetime_record_delta,
+                           samples=learner.summary(outcome.side, outcome.speed))
+                pending_actions.pop(outcome.action_id, None)
+                _save_learning(config.state_path, learner)
 
-            target_y = TARGET_Y
-            if vy < -20 and y < target_y - 35:
-                ready = True
-            if vy > 30 and ready and now - last_action > 0.28:
-                seconds_to_flipper = (target_y - y) / vy
-                if 0 <= seconds_to_flipper <= action_lead:
+            if vy < -20 and y < TARGET_Y - 35:
+                armed = True
+                planned_action = None
+            if not paused and vy > 30 and armed and now - last_action > ACTION_COOLDOWN:
+                seconds_to_flipper = (TARGET_Y - y) / vy
+                if 0 <= seconds_to_flipper <= max(learner.leads):
                     predicted_x = x + vx * seconds_to_flipper
                     side = "left" if predicted_x < 250 else "right"
-                    used_lead = action_lead
-                    client.evaluate(f"window.__pincrementalBotKey('{side}', true)")
-                    last_key = side
-                    release_at = now + 0.10
-                    pending = {"lead": used_lead, "reward": 0.0, "time": now, "hits": hits}
-                    action_lead = select_lead(state)
-                    last_action = now
-                    ready = False
+                    if planned_action is None or planned_action[0] != side:
+                        planned_action = (side, speed, learner.choose_lead(side, speed))
+                    used_lead = planned_action[2]
+                    last_side, last_speed, action_lead = side, speed, used_lead
+                    action_label = f"suggest {side} at {used_lead:.2f}s"
+                    if seconds_to_flipper <= used_lead:
+                        action_id = uuid.uuid4().hex
+                        logger.action(
+                            action_id=action_id, side=side, speed=speed, lead=used_lead,
+                            predicted_x=predicted_x, x=x, y=y, vx=vx, vy=vy,
+                            seconds_to_flipper=seconds_to_flipper, dry_run=dry_run,
+                        )
+                        if not dry_run:
+                            try:
+                                client.press_paddle(side)
+                            except (CDPDisconnected, CDPTimeout) as exc:
+                                _recover_connection(client, logger, exc)
+                                previous = None
+                                continue
+                            last_key = side
+                            release_at = now + RELEASE_SECONDS
+                            outcomes.begin(
+                                action_id, side, speed, used_lead, hits, current_record,
+                                lifetime_record, now=now,
+                            )
+                            pending_actions[action_id] = now
+                        last_action = now
+                        armed = False
+                        planned_action = None
 
-            if now - last_status > 1:
+            if now - last_ball_log >= 0.10:
+                logger.ball(x=x, y=y, vx=vx, vy=vy, hits=hits,
+                            record=current_record, lifetime_record=lifetime_record,
+                            paused=paused, dry_run=dry_run)
+                last_ball_log = now
+
+            status = "Paused" if paused else ("Dry run" if dry_run else "Playing")
+            if ui:
+                ui.update(_ui_snapshot(
+                    status=status,
+                    ball={"x": x, "y": y},
+                    velocity={"x": vx, "y": vy},
+                    hits=hits,
+                    current_record=current_record,
+                    lifetime_record=progress.best_lifetime_record,
+                    score_rate=last_rate,
+                    action=action_label,
+                    lead=action_lead,
+                    learner=learner,
+                    side=last_side,
+                    speed=last_speed,
+                    paused=paused,
+                    dry_run=dry_run,
+                ))
+
+            if now - last_status >= 1.0:
                 elapsed = max(1.0, now - session_start)
-                rate = max(0, (hits or 0) - (hits_at_start or 0)) * 60 / elapsed
-                print(f"ball=({x:.0f},{y:.0f}) velocity=({vx:.0f},{vy:.0f}) hits={hits} "
-                      f"record={best} rate={rate:.1f}/min lead={action_lead:.2f}s", flush=True)
+                print(
+                    f"{status}: ball=({x:.0f},{y:.0f}) v=({vx:.0f},{vy:.0f}) "
+                    f"hits={hits} run-record={current_record} lifetime={progress.best_lifetime_record} "
+                    f"rate={last_rate:.1f}/min action={action_label}",
+                    flush=True,
+                )
                 last_status = now
             previous = (x, y, now)
-            time.sleep(0.015)
+            last_sample = sample
+            time.sleep(SAMPLE_SLEEP)
 
     except KeyboardInterrupt:
-        print("Stopping; releasing both flippers.")
-        for side in ("left", "right"):
-            try:
-                client.evaluate(f"window.__pincrementalBotKey('{side}', false)")
-            except Exception:
-                pass
+        print("Stopping bot.")
     finally:
-        client.close()
-        save_state(args.state, state)
-        print(f"Learning state saved to {args.state}")
+        if client:
+            try:
+                client.release_all()
+            except CDPClientError as exc:
+                logger.log("release_failed", error=str(exc))
+            client.close(release=False)
+        _save_learning(config.state_path, learner)
+        logger.log("session_end", last_sample=last_sample)
+        logger.close()
+        if ui:
+            ui.close()
+
+
+def main() -> None:
+    args = _parser().parse_args()
+    try:
+        config = BotConfig.load(
+            args.config,
+            app_id=args.app_id,
+            debug_port=args.port,
+            state_path=args.state,
+            log_path=args.log,
+            dry_run=args.dry_run,
+        )
+        run_bot(
+            config=config,
+            no_launch=args.no_launch,
+            launch_timeout=args.connect_timeout,
+            no_ui=args.no_ui,
+        )
+    except (RuntimeError, ValueError, CDPClientError) as exc:
+        raise SystemExit(f"Pincremental bot: {exc}") from exc
 
 
 if __name__ == "__main__":

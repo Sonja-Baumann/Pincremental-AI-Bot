@@ -57,7 +57,13 @@ class PageEvaluationError(CDPClientError):
 
 
 INSTALL_HOOK = r"""(function() {
-  if (window.__pincrementalBotInstalled) return { ready: true, installed: true };
+  if (window.__pincrementalBotInstalled &&
+      typeof window.__pincrementalBotRead === 'function' &&
+      typeof window.__pincrementalBotKey === 'function' &&
+      typeof window.__pincrementalBotDismissOffline === 'function' &&
+      typeof window.__pincrementalBotDisableAutoPaddles === 'function') {
+    return { ready: true, installed: true };
+  }
   if (document.readyState !== 'complete') return { ready: false, reason: 'page-loading' };
   var botMatter = window.Matter;
   var botJQuery = window.jQuery || window.$;
@@ -76,22 +82,26 @@ INSTALL_HOOK = r"""(function() {
   // active. The file-backed Pincremental target is already verified during
   // discovery; Matter.js is the required live-game capability for tracking.
   var engineApi = botMatter.Engine;
-  var originalUpdate = engineApi.update;
-  engineApi.update = function() {
-    var engine = arguments[0];
-    var result = originalUpdate.apply(this, arguments);
-    var bodies = engine.world.bodies;
-    var ball = null;
-    for (var i = 0; i < bodies.length; i++) {
-      if (bodies[i].label === 'pinball') { ball = bodies[i]; break; }
-    }
-    if (ball) window.__pincrementalBotBall = {
-      x: ball.position.x, y: ball.position.y,
-      vx: ball.velocity.x, vy: ball.velocity.y,
-      time: performance.now()
+  if (!engineApi.update.__pincrementalBotWrapped) {
+    var originalUpdate = engineApi.update;
+    var botUpdate = function() {
+      var engine = arguments[0];
+      var result = originalUpdate.apply(this, arguments);
+      var bodies = engine.world.bodies;
+      var ball = null;
+      for (var i = 0; i < bodies.length; i++) {
+        if (bodies[i].label === 'pinball') { ball = bodies[i]; break; }
+      }
+      if (ball) window.__pincrementalBotBall = {
+        x: ball.position.x, y: ball.position.y,
+        vx: ball.velocity.x, vy: ball.velocity.y,
+        time: performance.now()
+      };
+      return result;
     };
-    return result;
-  };
+    botUpdate.__pincrementalBotWrapped = true;
+    engineApi.update = botUpdate;
+  }
   window.__pincrementalBotRead = function() {
     var ball = window.__pincrementalBotBall || null;
     function number(selector) {

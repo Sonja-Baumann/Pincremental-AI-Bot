@@ -188,6 +188,16 @@ class CDPClientTests(unittest.TestCase):
         self.assertIn("botMatter.Engine", INSTALL_HOOK)
         self.assertNotIn("Pincremental board selectors missing", INSTALL_HOOK)
 
+    def test_injected_hook_repairs_stale_partial_install_without_wrapping_twice(self):
+        for function_name in (
+            "__pincrementalBotRead",
+            "__pincrementalBotKey",
+            "__pincrementalBotDismissOffline",
+            "__pincrementalBotDisableAutoPaddles",
+        ):
+            self.assertIn(f"typeof window.{function_name} === 'function'", INSTALL_HOOK)
+        self.assertIn("engineApi.update.__pincrementalBotWrapped", INSTALL_HOOK)
+
 
 if __name__ == "__main__":
     unittest.main()

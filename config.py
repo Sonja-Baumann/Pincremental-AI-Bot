@@ -18,6 +18,16 @@ from typing import Any
 APP_NAME = "pincremental-ai-bot"
 DEFAULT_APP_ID = "1369470"
 DEFAULT_DEBUG_PORT = 9222
+UPGRADE_STRATEGIES = {
+    "balanced",
+    "machine-first",
+    "ticket-first",
+    "arcade-first",
+    "permanent-first",
+    "high-score-first",
+    "current-score-first",
+    "doubler-first",
+}
 
 def _legacy_state_path() -> Path:
     return Path.home() / ".pincremental_bot.json"
@@ -53,6 +63,8 @@ class BotConfig:
     log_path: Path
     dry_run: bool
     config_path: Path
+    auto_upgrades: bool = False
+    upgrade_strategy: str = "balanced"
 
     @classmethod
     def load(
@@ -64,6 +76,8 @@ class BotConfig:
         state_path: str | Path | None = None,
         log_path: str | Path | None = None,
         dry_run: bool | None = None,
+        auto_upgrades: bool | None = None,
+        upgrade_strategy: str | None = None,
     ) -> "BotConfig":
         """Load JSON config, apply explicit overrides, and preserve legacy state.
 
@@ -88,6 +102,13 @@ class BotConfig:
         explicit_state = state_path if state_path is not None else raw.get("state_path")
         explicit_log = log_path if log_path is not None else raw.get("log_path")
         dry_value = dry_run if dry_run is not None else raw.get("dry_run", False)
+        upgrades_value = (
+            auto_upgrades if auto_upgrades is not None else raw.get("auto_upgrades", False)
+        )
+        strategy_value = (
+            upgrade_strategy if upgrade_strategy is not None
+            else raw.get("upgrade_strategy", "balanced")
+        )
 
         if not isinstance(app_value, (str, int)) or not str(app_value).isdigit():
             raise ValueError("app_id must contain only digits")
@@ -99,6 +120,11 @@ class BotConfig:
             raise ValueError("debug_port must be an integer from 1 to 65535")
         if not isinstance(dry_value, bool):
             raise ValueError("dry_run must be a JSON boolean")
+        if not isinstance(upgrades_value, bool):
+            raise ValueError("auto_upgrades must be a JSON boolean")
+        if not isinstance(strategy_value, str) or strategy_value not in UPGRADE_STRATEGIES:
+            choices = ", ".join(sorted(UPGRADE_STRATEGIES))
+            raise ValueError(f"upgrade_strategy must be one of: {choices}")
 
         state_default = data_home() / APP_NAME / "learning.json"
         log_default = state_home() / APP_NAME / "sessions.jsonl"
@@ -123,6 +149,8 @@ class BotConfig:
             log_path=resolved_log,
             dry_run=dry_value,
             config_path=resolved_config_path,
+            auto_upgrades=upgrades_value,
+            upgrade_strategy=strategy_value,
         )
 
     def ensure_directories(self) -> None:
@@ -141,6 +169,8 @@ class BotConfig:
             "state_path": str(self.state_path),
             "log_path": str(self.log_path),
             "dry_run": self.dry_run,
+            "auto_upgrades": self.auto_upgrades,
+            "upgrade_strategy": self.upgrade_strategy,
         }
         temp = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
         temp.write_text(json.dumps(values, indent=2) + "\n", encoding="utf-8")

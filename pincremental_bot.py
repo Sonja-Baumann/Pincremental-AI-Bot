@@ -23,7 +23,7 @@ from cdp_client import (
     TargetNotFound,
     connect_pincremental,
 )
-from config import BotConfig
+from config import BotConfig, UPGRADE_STRATEGIES
 from learning import ActionOutcomeTracker, ProgressSnapshot, ProgressTracker, TimingLearner
 from session_log import JsonlSessionLogger
 
@@ -109,6 +109,13 @@ def _parser() -> argparse.ArgumentParser:
                         help="observe and recommend paddle actions without pressing them")
     parser.add_argument("--play", dest="dry_run", action="store_false",
                         help="override config and enable paddle control")
+    upgrades = parser.add_mutually_exclusive_group()
+    upgrades.add_argument("--auto-upgrades", dest="auto_upgrades", action="store_true",
+                          default=None, help="buy affordable upgrades across supported game shops")
+    upgrades.add_argument("--no-auto-upgrades", dest="auto_upgrades", action="store_false",
+                          default=None, help="disable automatic upgrade purchases")
+    parser.add_argument("--upgrade-strategy", choices=sorted(UPGRADE_STRATEGIES),
+                        help="priority order for automatic purchases across game shops")
     parser.add_argument("--no-launch", action="store_true",
                         help="connect only; do not launch the game through Steam")
     parser.add_argument("--no-ui", action="store_true", help="run without the status window")
@@ -331,8 +338,8 @@ def run_bot(
         previous: tuple[float, float, float] | None = None
         last_ball_log = 0.0
         last_status = 0.0
-        last_popup_check = 0.0
         last_action = 0.0
+        last_upgrade_check = 0.0
         action_lead: float | None = None
         planned_action: tuple[str, float, float] | None = None
         action_label = "observing"
@@ -353,6 +360,19 @@ def run_bot(
         )
         print("Use the status window to pause, emergency-stop, or toggle dry-run; Ctrl+C also stops.")
         logger.log("session_ready", target=client.target_info, dry_run=dry_run)
+        logger.log(
+            "upgrade_automation",
+            enabled=config.auto_upgrades,
+            strategy=config.upgrade_strategy,
+        )
+        if config.auto_upgrades:
+            print(
+                f"Automatic machine upgrades enabled ({config.upgrade_strategy}); "
+                "this setting is independent of paddle control.",
+                flush=True,
+            )
+        else:
+            print("Automatic machine upgrades are disabled.", flush=True)
 
         while not stop_requested:
             now = time.monotonic()
@@ -381,19 +401,37 @@ def run_bot(
             if stop_requested:
                 break
 
-            # Startup popups can appear after the initial connection, even
-            # while ball tracking has no sample yet. Poll independently.
-            if now - last_popup_check >= 0.5:
-                last_popup_check = now
+            if config.auto_upgrades and not paused and now - last_upgrade_check >= 3.0:
+                last_upgrade_check = now
                 try:
-                    dismissed = client.dismiss_known_popup()
+                    bought_upgrade = client.buy_available_upgrade(config.upgrade_strategy)
                 except (CDPDisconnected, CDPTimeout) as exc:
-                    _recover_connection(client, logger, exc)
-                    previous = None
+                    last_key = None
+                    action_label = "reconnecting"
+                    print(f"Game connection lost: {exc}; reconnecting…", flush=True)
+                    try:
+                        _recover_connection(client, logger, exc)
+                        reconnect_delay = 1.0
+                        previous = None
+                        print("Reconnected to Pincremental.", flush=True)
+                    except CDPClientError as reconnect_error:
+                        logger.log("reconnect_failed", error=str(reconnect_error))
+                        time.sleep(reconnect_delay)
+                        reconnect_delay = min(10.0, reconnect_delay * 1.8)
                     continue
-                if dismissed:
-                    logger.log("popup_dismissed", title=dismissed)
-                    print(f"Dismissed {dismissed} popup.", flush=True)
+                if bought_upgrade:
+                    logger.log(
+                        "upgrade_purchased",
+                        store=bought_upgrade["store"],
+                        upgrade=bought_upgrade["upgrade"],
+                        strategy=config.upgrade_strategy,
+                    )
+                    print(
+                        f"Purchased {bought_upgrade['store']} upgrade "
+                        f"{bought_upgrade['upgrade']}.",
+                        flush=True,
+                    )
+                    action_label = f"upgrade {bought_upgrade['upgrade']}"
 
             try:
                 sample = client.read_state()
@@ -648,6 +686,8 @@ def main() -> None:
             state_path=args.state,
             log_path=args.log,
             dry_run=args.dry_run,
+            auto_upgrades=args.auto_upgrades,
+            upgrade_strategy=args.upgrade_strategy,
         )
         run_bot(
             config=config,

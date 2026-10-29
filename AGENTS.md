@@ -1,28 +1,21 @@
-# Repository guidance
+# Repository Guidelines
 
-## Project purpose
+## Project Structure
 
-This project is a local Linux bot for the Steam game Pincremental. It reads live ball state from the game's Electron/Matter.js runtime through Chrome DevTools Protocol and sends flipper events through the game's page handlers. It learns timing preferences between sessions.
+The application is a Python 3.10+ Linux bot. Core modules live at the repository root: `pincremental_bot.py` coordinates launch and control, while `cdp_client.py`, `config.py`, `bot_ui.py`, `learning.py`, `session_log.py`, and `simulation.py` provide supporting components. Automated tests are in `tests/`. `README.md` documents setup and use; `ROADMAP.md` tracks implemented work and future ideas.
 
-## Architecture constraints
+## Development Commands
 
-- Keep game tracking independent of desktop screen coordinates. Pincremental's Matter.js board uses its own physics coordinate space, so moving or resizing the window must not require recalibration.
-- Keep DevTools bound to `127.0.0.1`; never expose the debugging port on a public or LAN interface.
-- Do not patch or overwrite the installed Steam game. Make changes in this repository and inject runtime instrumentation through CDP.
-- Keep injected JavaScript compatible with the older Chromium version bundled by this game; avoid newer syntax such as optional chaining, nullish coalescing, and spread syntax in `INSTALL_HOOK`.
-- Preserve the user's learning state at `~/.pincremental_bot.json` across code changes unless a migration is necessary.
+Create an editable development install with `python -m pip install -e '.[dev]' build`. Run locally with `.venv/bin/pincremental-ai-bot` (or `python pincremental_bot.py`). The project checks are `python -m pytest`, `python -m ruff check .`, `python -m ruff format --check .`, `python -m mypy`, and `python -m build`.
 
-## Project files
+## Style and Tests
 
-- `pincremental_bot.py`: Steam launch, CDP connection, runtime hook, paddle control, and persisted timing learner.
-- `pyproject.toml`: package metadata, dependencies, and console entry point.
-- `requirements.txt`: direct dependency list for pip-based setup.
-- `README.md`: installation and usage.
-- `ROADMAP.md`: candidate reliability, learning, usability, and maintenance work.
+Use four-space Python indentation, descriptive `snake_case` names, and lines up to 100 characters. Keep type annotations current; Ruff and mypy settings are in `pyproject.toml`. Add focused `pytest` tests under `tests/`, named `test_<area>.py`, for behavior changes. Tests cover Python components; Steam/Electron launch and UI behavior still need interactive Linux validation.
 
-## Development
+## Architecture and Safety
 
-- Use Python 3.10 or newer.
-- Keep runtime dependencies minimal and declare them in `pyproject.toml` and `requirements.txt`.
-- Prefer explicit status messages and fail-safe behavior. Always release paddle inputs if the bot exits or loses its connection.
-- Keep UI and window geometry out of the controller unless a future overlay explicitly needs them.
+Track the game through Matter.js physics coordinates, never desktop screen coordinates. Keep Chrome DevTools bound to `127.0.0.1`; do not patch the installed Steam game. Inject instrumentation through CDP and keep `INSTALL_HOOK` JavaScript compatible with the bundled older Chromium (no optional chaining, nullish coalescing, or spread syntax). Release both paddle inputs on shutdown or connection loss. Preserve existing learning data and migrate it only when necessary; never discard the legacy `~/.pincremental_bot.json` during migration.
+
+## Commits and Pull Requests
+
+Use short, imperative commit subjects, matching the history (for example, “Repair stale Pincremental hooks on reconnect”). Pull requests should explain the behavior change, list relevant validation commands and results, and note any game-version or interactive validation limits. Include screenshots only for visible UI changes.

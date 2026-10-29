@@ -22,3 +22,10 @@ The original reliability, learning, usability, and maintenance roadmap is implem
 - Steam launch and user-interface behavior depend on the local Steam/Electron desktop session and need an interactive run on each supported Linux desktop. Automated CI covers the Python components only.
 
 Run the local checks with `python -m pytest`, `python -m ruff check .`, `python -m ruff format --check .`, `python -m mypy`, and `python -m build` after installing `.[dev]` and `build`.
+
+## Future ideas
+
+- [x] Treat the offline progress dialog as a startup-only popup: dismiss it once when the game opens, then leave popup handling idle during normal play unless another supported dialog appears.
+- [x] Add optional automatic purchases across safe in-game upgrade shops, with configurable priorities and an independent on/off setting.
+- [ ] Refresh the status window with a more polished visual design while keeping its resize, pause, dry-run, and emergency-stop controls.
+- [ ] Add session history and a score/timing progress chart to make improvement across runs easier to see.

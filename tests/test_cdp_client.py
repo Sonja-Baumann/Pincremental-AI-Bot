@@ -2,6 +2,7 @@ import json
 import unittest
 
 from cdp_client import (
+    BUY_AVAILABLE_UPGRADE,
     CDPProtocolError,
     DISABLE_AUTO_PADDLES,
     DISMISS_KNOWN_POPUP,
@@ -202,6 +203,35 @@ class CDPClientTests(unittest.TestCase):
         self.assertIn("toggle.click()", DISABLE_AUTO_PADDLES)
         self.assertNotIn("__pincrementalBotDismissOffline", socket.sent[0]["params"]["expression"])
         client.close(release=False)
+
+    def test_upgrade_purchase_uses_strategy_cursor_and_returns_store(self):
+        client, socket, _calls = self.make_client([{
+            "id": 1,
+            "result": {"result": {"type": "object", "value": {
+                "store": "ticket", "upgrade": "EL2", "next_cursor": 2,
+            }}},
+        }])
+        self.assertEqual(
+            client.buy_available_upgrade("balanced"),
+            {"store": "ticket", "upgrade": "EL2"},
+        )
+        self.assertEqual(client._upgrade_cursor, 2)
+        expression = socket.sent[0]["params"]["expression"]
+        self.assertIn('(\"balanced\", 0)', expression)
+        client.close(release=False)
+
+    def test_upgrade_purchase_is_limited_to_allowlisted_non_reset_shops(self):
+        for popup in (
+            "#PointPopup", "#TicketPopup", "#ArcadePopup", "#CompanyPopup",
+            "#InvestorPopup", "#WizardPopup",
+        ):
+            with self.subTest(popup=popup):
+                self.assertIn(popup, BUY_AVAILABLE_UPGRADE)
+        for unsafe_id in ("'NewGame'", "'AutoCash'", "'AutoShares'", "'AutoCompanies'",
+                          "'AutoInvestors'", "'AutoPaddles'"):
+            with self.subTest(unsafe_id=unsafe_id):
+                self.assertNotIn(unsafe_id, BUY_AVAILABLE_UPGRADE)
+        self.assertIn("if (!button || button.disabled) continue", BUY_AVAILABLE_UPGRADE)
 
     def test_invalid_ball_coordinates_are_rejected(self):
         sample = {"ball": {"x": 1}, "hits": 1, "best": 1}

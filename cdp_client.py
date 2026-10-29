@@ -164,6 +164,95 @@ DISABLE_AUTO_PADDLES = r"""(function() {
   if (toggle) toggle.click();
   return !!toggle;
 })()"""
+BUY_AVAILABLE_UPGRADE = r"""(function(strategy, cursor) {
+  // Explicit allowlists omit resets, donations, built-in auto paddles, and
+  // upgrades that enable or preserve automatic prestige actions.
+  var groups = [
+    { key: 'machine', root: '#PointPopup', cls: 'Upgrade',
+      ids: ['HSM1', 'HSM2', 'HSM3', 'HSM4', 'HSM5',
+            'CSM1', 'CSM2', 'CSM3', 'CSM4', 'CSM5', 'Doubler'] },
+    { key: 'ticket', root: '#TicketPopup', cls: 'Upgrade',
+      ids: ['Tripler', 'CSE1', 'CSE2', 'CSE3', 'CSE4', 'CSE5',
+            'MultiplierZones', 'EL1', 'EL2', 'SideBlockers'] },
+    { key: 'arcade', root: '#ArcadePopup', cls: 'Upgrade',
+      ids: ['MoneyPoints', 'aDoubler', 'aHSM', 'aCSM', 'aTripler', 'aCSE',
+            'aMultiplierZones', 'aEL', 'aSideBlockers'] },
+    { key: 'company', root: '#CompanyPopup', cls: 'CompanyUpgrade',
+      ids: ['CompanyPoints', 'PermaDoubler', 'PermaHSM', 'PermaCSM',
+            'PermaTripler', 'PermaCSE', 'PermaMultiplierZones',
+            'PermaEL', 'PermaSideBlockers'] },
+    { key: 'investor', root: '#InvestorPopup', cls: 'InvestorUpgrade',
+      ids: ['CardTransM', 'InvestorIncomeMulti', 'InvestorMulti', 'HSE',
+            'RetainBasicPermas', 'RetainMultiplierZones', 'RetainSideBlockers',
+            'StoreMulti', 'CompMulti', 'PermaFirstSpin', 'PermaAutoArcade'] },
+    { key: 'wizard', root: '#WizardPopup', cls: 'WizardUpgrade',
+      ids: ['WizardFavorMulti', 'PointMana', 'TicketMana', 'LifetimeMulti',
+            'MultiZoneMulti', 'PermaScore', 'RetainUpMultis', 'RetainAutoMultis'] }
+  ];
+  var fixedOrders = {
+    'machine-first': ['machine', 'ticket', 'arcade', 'company', 'investor', 'wizard'],
+    'ticket-first': ['ticket', 'machine', 'arcade', 'company', 'investor', 'wizard'],
+    'arcade-first': ['arcade', 'machine', 'ticket', 'company', 'investor', 'wizard'],
+    'permanent-first': ['wizard', 'investor', 'company', 'arcade', 'ticket', 'machine'],
+    'high-score-first': ['machine', 'ticket', 'arcade', 'company', 'investor', 'wizard'],
+    'current-score-first': ['machine', 'ticket', 'arcade', 'company', 'investor', 'wizard'],
+    'doubler-first': ['machine', 'ticket', 'arcade', 'company', 'investor', 'wizard']
+  };
+  var order = [];
+  var i;
+  if (strategy === 'balanced') {
+    cursor = cursor % groups.length;
+    for (i = 0; i < groups.length; i++) {
+      order.push(groups[(cursor + i) % groups.length].key);
+    }
+  } else {
+    order = fixedOrders[strategy] || fixedOrders['machine-first'];
+  }
+  var machineIds = groups[0].ids;
+  if (strategy === 'high-score-first') {
+    machineIds = ['HSM1', 'HSM2', 'HSM3', 'HSM4', 'HSM5',
+                  'Doubler', 'CSM1', 'CSM2', 'CSM3', 'CSM4', 'CSM5'];
+  } else if (strategy === 'current-score-first') {
+    machineIds = ['CSM1', 'CSM2', 'CSM3', 'CSM4', 'CSM5',
+                  'Doubler', 'HSM1', 'HSM2', 'HSM3', 'HSM4', 'HSM5'];
+  } else if (strategy === 'doubler-first') {
+    machineIds = ['Doubler', 'HSM1', 'HSM2', 'HSM3', 'HSM4', 'HSM5',
+                  'CSM1', 'CSM2', 'CSM3', 'CSM4', 'CSM5'];
+  }
+  for (var o = 0; o < order.length; o++) {
+    var group = null;
+    for (i = 0; i < groups.length; i++) {
+      if (groups[i].key === order[o]) { group = groups[i]; break; }
+    }
+    if (!group) continue;
+    var ids = group.key === 'machine' ? machineIds : group.ids;
+    for (var j = 0; j < ids.length; j++) {
+      var id = ids[j];
+      var button = document.querySelector(group.root + ' button.' + group.cls + '#' + id);
+      if (!button || button.disabled) continue;
+      if (group.key === 'arcade' && id.charAt(0) === 'a') {
+        var hireLabel = button.querySelector('.HireFire');
+        if (!hireLabel || hireLabel.textContent.replace(/\s/g, '').toLowerCase() !== 'hire') continue;
+      }
+      button.click();
+      var nextCursor = strategy === 'balanced'
+        ? (cursor + 1) % groups.length
+        : (groups.indexOf(group) + 1) % groups.length;
+      return { store: group.key, upgrade: id, next_cursor: nextCursor };
+    }
+    if (group.key === 'arcade') {
+      var storeButton = document.querySelector('#ArcadePopup button.BuyStoreButton#BuyStore');
+      if (storeButton && !storeButton.disabled) {
+        storeButton.click();
+        var nextStoreCursor = strategy === 'balanced'
+          ? (cursor + 1) % groups.length
+          : (groups.indexOf(group) + 1) % groups.length;
+        return { store: group.key, upgrade: 'BuyStore', next_cursor: nextStoreCursor };
+      }
+    }
+  }
+  return null;
+})"""
 DISPATCH_PADDLE_KEY = r"""(function(side, down) {
   var code = side === 'left' ? 37 : 39;
   var jquery = window.jQuery || window.$;
@@ -268,6 +357,7 @@ class PincrementalClient:
         self.timeout = timeout
         self._websocket_factory = websocket_factory
         self._game_version = ""
+        self._upgrade_cursor = 0
         ws_url = _loopback_websocket_url(str(target["webSocketDebuggerUrl"]), self.port)
         try:
             self._ws = websocket_factory(ws_url, timeout=timeout, suppress_origin=True)
@@ -455,6 +545,24 @@ class PincrementalClient:
 
     def disable_auto_paddles(self) -> bool:
         return bool(self.evaluate(DISABLE_AUTO_PADDLES))
+
+    def buy_available_upgrade(self, strategy: str = "balanced") -> dict[str, str] | None:
+        """Buy one enabled upgrade through the game's own button handler."""
+        expression = (
+            f"({BUY_AVAILABLE_UPGRADE})({json.dumps(strategy)}, {self._upgrade_cursor})"
+        )
+        result = self.evaluate(expression)
+        if not isinstance(result, dict):
+            return None
+        upgrade = str(result.get("upgrade") or "")
+        store = str(result.get("store") or "")
+        if not upgrade or not store:
+            return None
+        try:
+            self._upgrade_cursor = int(result.get("next_cursor", self._upgrade_cursor))
+        except (TypeError, ValueError):
+            pass
+        return {"store": store, "upgrade": upgrade}
 
     def close_game(self) -> None:
         """Close the Pincremental page; the Linux Electron app exits with its window."""

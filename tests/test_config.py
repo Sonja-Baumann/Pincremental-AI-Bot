@@ -47,6 +47,28 @@ class BotConfigTests(unittest.TestCase):
             self.assertEqual(config.state_path, root / "configured.json")
             self.assertFalse(config.dry_run)
 
+    def test_auto_upgrade_options_default_off_and_persist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            with patch.dict(os.environ, {"HOME": str(home)}, clear=True):
+                config = BotConfig.load()
+                self.assertFalse(config.auto_upgrades)
+                self.assertEqual(config.upgrade_strategy, "balanced")
+                configured = BotConfig.load(
+                    auto_upgrades=True,
+                    upgrade_strategy="ticket-first",
+                )
+                configured.save()
+                saved = json.loads(configured.config_path.read_text(encoding="utf-8"))
+            self.assertTrue(saved["auto_upgrades"])
+            self.assertEqual(saved["upgrade_strategy"], "ticket-first")
+
+    def test_rejects_unknown_upgrade_strategy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"HOME": directory}, clear=True):
+                with self.assertRaisesRegex(ValueError, "upgrade_strategy"):
+                    BotConfig.load(upgrade_strategy="spend-everything")
+
     def test_legacy_learning_file_is_copied_not_removed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -1,9 +1,13 @@
 import unittest
 
-from pincremental_bot import build_steam_command
+from pincremental_bot import _parser, build_steam_command
 
 
 class SteamLaunchTests(unittest.TestCase):
+    def test_dry_run_and_live_play_flags_have_explicit_values(self):
+        self.assertIs(_parser().parse_args(["--dry-run"]).dry_run, True)
+        self.assertIs(_parser().parse_args(["--play"]).dry_run, False)
+
     def test_command_passes_app_id_and_loopback_debug_port_flags(self):
         self.assertEqual(
             build_steam_command("/usr/bin/steam", "1369470", 9222),

@@ -345,6 +345,11 @@ def run_bot(
         last_speed: float | None = None
         reconnect_delay = 1.0
         print("Connected to Pincremental. Window position and size are yours to choose.")
+        print(
+            "Mode: DRY RUN (observing only; no paddles will be pressed)."
+            if dry_run else "Mode: LIVE PLAY (the bot will press paddles).",
+            flush=True,
+        )
         print("Use the status window to pause, emergency-stop, or toggle dry-run; Ctrl+C also stops.")
         logger.log("session_ready", target=client.target_info, dry_run=dry_run)
 
@@ -392,7 +397,42 @@ def run_bot(
                     reconnect_delay = min(10.0, reconnect_delay * 1.8)
                 continue
 
+            if sample is not None and sample.get("popup_visible") and "offline progress" in str(
+                sample.get("popup_title", "")
+            ).lower():
+                try:
+                    dismissed = client.dismiss_known_popup()
+                except (CDPDisconnected, CDPTimeout) as exc:
+                    _recover_connection(client, logger, exc)
+                    previous = None
+                    continue
+                if dismissed:
+                    logger.log("popup_dismissed", title=dismissed)
+                    print(f"Dismissed {dismissed} popup.", flush=True)
+                    previous = None
+                    time.sleep(0.1)
+
             if sample is None or sample.get("ball") is None:
+                if ui:
+                    ui.update(_ui_snapshot(
+                        status="Waiting for ball",
+                        ball=None,
+                        velocity=None,
+                        hits=None,
+                        current_record=None,
+                        lifetime_record=progress.best_lifetime_record,
+                        score_rate=last_rate,
+                        action="clearing popup" if sample and sample.get("popup_visible") else "waiting",
+                        lead=action_lead,
+                        learner=learner,
+                        side=last_side,
+                        speed=last_speed,
+                        paused=paused,
+                        dry_run=dry_run,
+                    ))
+                if now - last_status >= 1.0:
+                    print("Waiting for the game ball…", flush=True)
+                    last_status = now
                 time.sleep(SAMPLE_SLEEP)
                 continue
             ball_state = sample["ball"]
@@ -420,18 +460,6 @@ def run_bot(
                     progress, learner, hits, current_record, lifetime_record, now=now
                 )
                 last_rate = progress_snapshot.session_hits_per_minute
-
-            if sample.get("popup_visible") and "offline progress" in str(
-                sample.get("popup_title", "")
-            ).lower():
-                try:
-                    dismissed = client.dismiss_known_popup()
-                except (CDPDisconnected, CDPTimeout) as exc:
-                    _recover_connection(client, logger, exc)
-                    previous = None
-                    continue
-                if dismissed:
-                    logger.log("popup_dismissed", title=dismissed)
 
             if last_key and now >= release_at:
                 try:

@@ -118,6 +118,24 @@ class CDPClientTests(unittest.TestCase):
         self.assertEqual(client.target_info["game_version"], "1.107")
         client.close(release=False)
 
+    def test_read_state_exposes_offline_popup_before_ball_is_available(self):
+        sample = {
+            "ball": None,
+            "hits": 0,
+            "best": 37,
+            "title": "Offline Progress",
+            "popupVisible": True,
+        }
+        client, _socket, _calls = self.make_client([{
+            "id": 1,
+            "result": {"result": {"type": "object", "value": sample}},
+        }])
+        state = client.read_state()
+        self.assertIsNone(state["ball"])
+        self.assertTrue(state["popup_visible"])
+        self.assertEqual(state["popup_title"], "Offline Progress")
+        client.close(release=False)
+
     def test_press_validates_side_and_dispatches_key_state(self):
         client, socket, _calls = self.make_client([{
             "id": 1, "result": {"result": {"type": "boolean", "value": True}}

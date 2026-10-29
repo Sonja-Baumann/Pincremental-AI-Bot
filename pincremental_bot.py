@@ -25,6 +25,7 @@ from cdp_client import (
 )
 from config import BotConfig
 from learning import ActionOutcomeTracker, ProgressSnapshot, ProgressTracker, TimingLearner
+from session_report import format_session_report
 from session_log import JsonlSessionLogger
 
 
@@ -233,6 +234,12 @@ def run_bot(
     ui: StatusWindow | None = None
     client: GameInterface | None = None
     last_sample: dict[str, Any] = {}
+    session_start: float | None = None
+    dry_run = config.dry_run
+    last_rate = 0.0
+    best_run_record = 0
+    total_actions = 0
+    resolved_actions = 0
     try:
         client = _connect_or_launch(config, no_launch=no_launch, timeout=launch_timeout)
         hook_deadline = time.monotonic() + 20
@@ -256,7 +263,6 @@ def run_bot(
                 print(f"Status window unavailable; using terminal controls: {exc}")
 
         outcomes = ActionOutcomeTracker(learner, logger=logger)
-        dry_run = config.dry_run
         paused = False
         stop_requested = False
         previous: tuple[float, float, float] | None = None
@@ -272,7 +278,6 @@ def run_bot(
         pending_actions: dict[str, float] = {}
         session_start = time.monotonic()
         last_sample: dict[str, Any] = {}
-        last_rate = 0.0
         last_side = "left"
         last_speed: float | None = None
         reconnect_delay = 1.0
@@ -335,6 +340,8 @@ def run_bot(
             hits = int(hits) if hits is not None else None
             current_record = int(current_record) if current_record is not None else None
             lifetime_record = int(lifetime_record)
+            if current_record is not None:
+                best_run_record = max(best_run_record, current_record)
 
             vx = vy = 0.0
             if previous:
@@ -394,6 +401,7 @@ def run_bot(
                     now=now,
                 )
                 if outcome:
+                    resolved_actions += 1
                     logger.log("policy_update", action_id=outcome.action_id,
                                side=outcome.side, lead=outcome.lead,
                                reward=outcome.reward, score_delta=outcome.score_delta,
@@ -404,6 +412,7 @@ def run_bot(
                     _save_learning(config.state_path, learner)
                     action_label = f"{outcome.side} result {outcome.reward:+.1f}"
             for outcome in outcomes.expire(now=now):
+                resolved_actions += 1
                 logger.log("policy_update", action_id=outcome.action_id,
                            side=outcome.side, lead=outcome.lead,
                            reward=outcome.reward, score_delta=outcome.score_delta,
@@ -428,6 +437,7 @@ def run_bot(
                     action_label = f"suggest {side} at {used_lead:.2f}s"
                     if seconds_to_flipper <= used_lead:
                         action_id = uuid.uuid4().hex
+                        total_actions += 1
                         logger.action(
                             action_id=action_id, side=side, speed=speed, lead=used_lead,
                             predicted_x=predicted_x, x=x, y=y, vx=vx, vy=vy,
@@ -499,8 +509,30 @@ def run_bot(
                 logger.log("release_failed", error=str(exc))
             client.close(release=False)
         _save_learning(config.state_path, learner)
-        logger.log("session_end", last_sample=last_sample)
+        logger.log(
+            "session_end",
+            last_sample=last_sample,
+            duration_seconds=(time.monotonic() - session_start) if session_start is not None else 0.0,
+            hits_gained=progress.session_hits,
+            best_run_record=best_run_record,
+            lifetime_record=progress.best_lifetime_record,
+            actions=total_actions,
+            resolved_actions=resolved_actions,
+        )
         logger.close()
+        if session_start is not None:
+            print(format_session_report(
+                dry_run=dry_run,
+                duration_seconds=time.monotonic() - session_start,
+                hits_gained=progress.session_hits,
+                best_run_record=best_run_record,
+                lifetime_record=progress.best_lifetime_record,
+                hits_per_minute=last_rate,
+                actions=total_actions,
+                resolved_actions=resolved_actions,
+                learner=learner,
+                log_path=logger.path,
+            ), flush=True)
         if ui:
             ui.close()
 

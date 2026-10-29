@@ -33,6 +33,8 @@ If Pincremental is already open without the bot interface, the script waits whil
 
 The bot dismisses the offline progress dialog and turns off built-in auto paddles after connecting. Its status window can be moved and resized freely. Space pauses/resumes, **D** toggles dry-run mode, and **Esc** releases both paddles and stops the bot. Ctrl+C in the terminal also stops it safely.
 
+When you stop a connected session, the terminal prints a report with elapsed time, hits gained, best run record, hits per minute, lifetime high score, action outcomes, and the strongest learned timing for each side/speed context. It also shows the session log path. Timing rewards summarize attributed rebounds and score changes; they are not game points.
+
 The first launch must start Pincremental through Steam so Electron receives the local debugging flags. If the game is already running without those flags, close only the game window when prompted; the bot will relaunch it. No laptop restart is required.
 
 Learning data, configuration, and JSONL session logs use XDG locations by default:

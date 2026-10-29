@@ -57,5 +57,8 @@ def test_one_live_purchase_changes_visible_game_state() -> None:
         assert after != before, (
             f"Clicked {purchase['store']}:{purchase['upgrade']}, but no visible shop state changed"
         )
+        print(
+            f"Live game action: {purchase['store']}:{purchase['upgrade']}; visible state changed."
+        )
     finally:
         client.close(release=False)

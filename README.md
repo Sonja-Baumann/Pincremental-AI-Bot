@@ -49,13 +49,13 @@ Automatic game purchases are disabled by default. Enable them with `--auto-upgra
 
 Choose `--upgrade-strategy balanced`, `machine-first`, `ticket-first`, `arcade-first`, or `permanent-first` (the config key is `"upgrade_strategy"`). `balanced` rotates through the six menus; the others choose a starting priority. `high-score-first`, `current-score-first`, and `doubler-first` are also available to order Machine Upgrades. This setting is independent of paddle control: `--dry-run` suppresses flipper presses but does not suppress explicitly enabled purchases. The dashboard pause control pauses both automation loops.
 
-An opt-in live integration test makes one purchase in the running game and checks that its visible state changes. It may spend game currency or trigger a reset, so run it only when that is intended:
+An opt-in live integration test connects to the running game, makes at most one eligible in-game purchase/reset, and checks that a shop's visible state changes. It prints the action it took. The test may spend game currency or reset progress; it never selects real-money purchase controls. Start Pincremental through the bot (or another Steam launch that enables loopback CDP) and ensure at least one action is affordable before running it. If no action is enabled, the test fails without making a purchase.
 
 ```bash
-PINCREMENTAL_LIVE_TEST=1 .venv/bin/python -m pytest tests/test_live_game.py -q
+PINCREMENTAL_LIVE_TEST=1 .venv/bin/python -m pytest tests/test_live_game.py -q -s
 ```
 
-It connects to the loopback CDP port (default `9222`); set `PINCREMENTAL_CDP_PORT` to use another port. The default strategy is `ticket-first`; override it with `PINCREMENTAL_UPGRADE_STRATEGY`.
+It connects to the loopback CDP port (default `9222`); set `PINCREMENTAL_CDP_PORT` to use another port. The default strategy is `ticket-first`; override it with `PINCREMENTAL_UPGRADE_STRATEGY`. The selector follows the configured priority and may reach a prestige/reset in a later shop if earlier shops have no affordable action.
 
 For development, install the extra tools and run the checks:
 

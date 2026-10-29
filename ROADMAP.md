@@ -13,11 +13,11 @@ The original reliability, learning, usability, and maintenance roadmap is implem
 - [x] Provide a resizable status window with ball/velocity, score, learned timing, pause, dry run, and emergency stop.
 - [x] Configure Steam app ID, debugging port, state/log paths, and dry-run mode with CLI/config-file overrides.
 - [x] Use XDG config/data/state paths and copy forward the legacy learning file without deleting it.
-- [x] Include unit tests, a deterministic policy comparison simulator, Python CI for tests/lint/format/types/package build, and setup/run documentation.
+- [x] Include unit tests, an opt-in live purchase check, a deterministic policy comparison simulator, Python CI for tests/lint/format/types/package build, and setup/run documentation.
 
 ## Validation still needed
 
-- The game integration has been checked against the installed Pincremental Global Version 1.107 source and its observed page structure. Test after game updates; DevTools integration cannot guarantee compatibility with future versions.
+- The game integration has been checked against the installed Pincremental Global Version 1.107 source and its observed page structure. The opt-in live check has completed an in-game prestige/reset and verified the visible shop state changed. Test after game updates; DevTools integration cannot guarantee compatibility with future versions.
 - The trajectory simulator is deliberately a light approximation, not a complete Matter.js replica. It models gravity, velocity limits, bumpers, walls, and a simplified flipper impulse. It omits the board's polygon paths, slingshot and flipper angular dynamics, upgrades/multipliers, and exact lives/reset rules. Use it to compare timing policies, then validate finalists in the game.
 - Steam launch and user-interface behavior depend on the local Steam/Electron desktop session and need an interactive run on each supported Linux desktop. Automated CI covers the Python components only.
 
@@ -26,6 +26,6 @@ Run the local checks with `python -m pytest`, `python -m ruff check .`, `python 
 ## Future ideas
 
 - [x] Treat the offline progress dialog as a startup-only popup: dismiss it once when the game opens, then leave popup handling idle during normal play unless another supported dialog appears.
-- [x] Add optional automatic purchases across safe in-game upgrade shops, with configurable priorities and an independent on/off setting.
+- [x] Add optional automatic purchases across in-game purchase and reset menus, with configurable priorities and an independent on/off setting; exclude real-money controls.
 - [ ] Refresh the status window with a more polished visual design while keeping its resize, pause, dry-run, and emergency-stop controls.
 - [ ] Add session history and a score/timing progress chart to make improvement across runs easier to see.

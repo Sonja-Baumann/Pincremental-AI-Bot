@@ -16,6 +16,10 @@ Use four-space Python indentation, descriptive `snake_case` names, and lines up 
 
 Track the game through Matter.js physics coordinates, never desktop screen coordinates. Keep Chrome DevTools bound to `127.0.0.1`; do not patch the installed Steam game. Inject instrumentation through CDP and keep `INSTALL_HOOK` JavaScript compatible with the bundled older Chromium (no optional chaining, nullish coalescing, or spread syntax). Release both paddle inputs on shutdown or connection loss. Preserve existing learning data and migrate it only when necessary; never discard the legacy `~/.pincremental_bot.json` during migration.
 
+## Live Game Testing
+
+`tests/test_live_game.py` is opt-in and attaches to an already running game through loopback CDP. Run it with `PINCREMENTAL_LIVE_TEST=1 .venv/bin/python -m pytest tests/test_live_game.py -q -s`; use `PINCREMENTAL_CDP_PORT` and `PINCREMENTAL_UPGRADE_STRATEGY` to override defaults. Keep the game open with an affordable action available. The test performs at most one purchase, may spend game currency or reset progress, prints the action taken, and verifies a visible shop change. It must never select donation, gold, or other real-money controls. If no action is available, it fails without spending.
+
 ## Commits and Pull Requests
 
 Use short, imperative commit subjects, matching the history (for example, “Repair stale Pincremental hooks on reconnect”). Pull requests should explain the behavior change, list relevant validation commands and results, and note any game-version or interactive validation limits. Include screenshots only for visible UI changes.

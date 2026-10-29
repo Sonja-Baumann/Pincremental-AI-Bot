@@ -10,8 +10,35 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["websocket-client>=1.7"]
 
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
 [project.scripts]
 pincremental-ai-bot = "pincremental_bot:main"
 
 [tool.setuptools]
-py-modules = ["pincremental_bot"]
+py-modules = [
+    "pincremental_bot",
+    "cdp_client",
+    "config",
+    "bot_ui",
+    "learning",
+    "session_log",
+    "simulation",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+ignore_missing_imports = true

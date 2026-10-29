@@ -146,6 +146,21 @@ INSTALL_HOOK = r"""(function() {
 })()"""
 
 READ_STATE = "window.__pincrementalBotRead ? window.__pincrementalBotRead() : null"
+DISMISS_KNOWN_POPUP = r"""(function() {
+  var titleElement = document.querySelector('#BasicPopup .PopTitle');
+  var title = titleElement ? titleElement.textContent.trim() : '';
+  if (/offline progress|^welcome!?$/i.test(title)) {
+    var button = document.querySelector('#BasicPopup .DonationHolder#PopConfirm button');
+    if (button) button.click();
+    return title;
+  }
+  return '';
+})()"""
+DISABLE_AUTO_PADDLES = r"""(function() {
+  var toggle = document.querySelector('.AutoPaddleToggle.Off');
+  if (toggle) toggle.click();
+  return !!toggle;
+})()"""
 
 
 def is_pincremental_target(target: Mapping[str, Any]) -> bool:
@@ -408,14 +423,14 @@ class PincrementalClient:
             raise CDPDisconnected("Could not release both paddles: " + "; ".join(errors))
 
     def dismiss_known_popup(self) -> str:
-        return str(self.evaluate("window.__pincrementalBotDismissOffline()") or "")
+        return str(self.evaluate(DISMISS_KNOWN_POPUP) or "")
 
     def dismiss_offline_popup(self) -> str:
         """Compatibility name for callers that only dismiss the known offline dialog."""
         return self.dismiss_known_popup()
 
-    def disable_auto_paddles(self) -> None:
-        self.evaluate("window.__pincrementalBotDisableAutoPaddles()")
+    def disable_auto_paddles(self) -> bool:
+        return bool(self.evaluate(DISABLE_AUTO_PADDLES))
 
     def close_game(self) -> None:
         """Close the Pincremental page; the Linux Electron app exits with its window."""

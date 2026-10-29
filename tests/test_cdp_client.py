@@ -3,6 +3,8 @@ import unittest
 
 from cdp_client import (
     CDPProtocolError,
+    DISABLE_AUTO_PADDLES,
+    DISMISS_KNOWN_POPUP,
     GameInterface,
     INSTALL_HOOK,
     PageEvaluationError,
@@ -165,6 +167,18 @@ class CDPClientTests(unittest.TestCase):
         client, socket, _calls = self.make_client([{"id": 1, "result": {}}])
         client.close_game()
         self.assertEqual(socket.sent[0]["method"], "Page.close")
+        client.close(release=False)
+
+    def test_popup_and_auto_paddle_controls_do_not_depend_on_injected_functions(self):
+        client, socket, _calls = self.make_client([
+            {"id": 1, "result": {"result": {"type": "string", "value": "Offline Progress"}}},
+            {"id": 2, "result": {"result": {"type": "boolean", "value": True}}},
+        ])
+        self.assertEqual(client.dismiss_known_popup(), "Offline Progress")
+        self.assertTrue(client.disable_auto_paddles())
+        self.assertIn("button.click()", DISMISS_KNOWN_POPUP)
+        self.assertIn("toggle.click()", DISABLE_AUTO_PADDLES)
+        self.assertNotIn("__pincrementalBotDismissOffline", socket.sent[0]["params"]["expression"])
         client.close(release=False)
 
     def test_invalid_ball_coordinates_are_rejected(self):

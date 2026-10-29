@@ -72,11 +72,9 @@ INSTALL_HOOK = r"""(function() {
   if (!botMatter || !botMatter.Engine || !botMatter.Engine.update || !botJQuery) {
     return { ready: false, unsupported: true, reason: 'Matter.js or jQuery missing' };
   }
-  if (!document.querySelector('.container') ||
-      !document.querySelector('.current-score span') ||
-      !document.querySelector('.high-score span')) {
-    return { ready: false, unsupported: true, reason: 'Pincremental board selectors missing' };
-  }
+  // DOM counters can be hidden/rebuilt while offline progress or menus are
+  // active. The file-backed Pincremental target is already verified during
+  // discovery; Matter.js is the required live-game capability for tracking.
   var engineApi = botMatter.Engine;
   var originalUpdate = engineApi.update;
   engineApi.update = function() {

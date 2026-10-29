@@ -174,6 +174,7 @@ class CDPClientTests(unittest.TestCase):
         self.assertIn("window.require('matter-js')", INSTALL_HOOK)
         self.assertIn("window.require('jquery')", INSTALL_HOOK)
         self.assertIn("botMatter.Engine", INSTALL_HOOK)
+        self.assertNotIn("Pincremental board selectors missing", INSTALL_HOOK)
 
 
 if __name__ == "__main__":

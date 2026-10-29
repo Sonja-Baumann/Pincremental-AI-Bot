@@ -331,6 +331,7 @@ def run_bot(
         previous: tuple[float, float, float] | None = None
         last_ball_log = 0.0
         last_status = 0.0
+        last_popup_check = 0.0
         last_action = 0.0
         action_lead: float | None = None
         planned_action: tuple[str, float, float] | None = None
@@ -380,6 +381,20 @@ def run_bot(
             if stop_requested:
                 break
 
+            # Startup popups can appear after the initial connection, even
+            # while ball tracking has no sample yet. Poll independently.
+            if now - last_popup_check >= 0.5:
+                last_popup_check = now
+                try:
+                    dismissed = client.dismiss_known_popup()
+                except (CDPDisconnected, CDPTimeout) as exc:
+                    _recover_connection(client, logger, exc)
+                    previous = None
+                    continue
+                if dismissed:
+                    logger.log("popup_dismissed", title=dismissed)
+                    print(f"Dismissed {dismissed} popup.", flush=True)
+
             try:
                 sample = client.read_state()
             except (CDPDisconnected, CDPTimeout) as exc:
@@ -396,21 +411,6 @@ def run_bot(
                     time.sleep(reconnect_delay)
                     reconnect_delay = min(10.0, reconnect_delay * 1.8)
                 continue
-
-            if sample is not None and sample.get("popup_visible") and "offline progress" in str(
-                sample.get("popup_title", "")
-            ).lower():
-                try:
-                    dismissed = client.dismiss_known_popup()
-                except (CDPDisconnected, CDPTimeout) as exc:
-                    _recover_connection(client, logger, exc)
-                    previous = None
-                    continue
-                if dismissed:
-                    logger.log("popup_dismissed", title=dismissed)
-                    print(f"Dismissed {dismissed} popup.", flush=True)
-                    previous = None
-                    time.sleep(0.1)
 
             if sample is None or sample.get("ball") is None:
                 if ui:

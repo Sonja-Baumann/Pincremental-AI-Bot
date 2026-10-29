@@ -223,6 +223,10 @@ class CDPClientTests(unittest.TestCase):
         self.assertIn("window.require('jquery')", INSTALL_HOOK)
         self.assertIn("botMatter.Engine", INSTALL_HOOK)
         self.assertNotIn("Pincremental board selectors missing", INSTALL_HOOK)
+        self.assertLess(
+            INSTALL_HOOK.index("botMatter = window.require('matter-js')"),
+            INSTALL_HOOK.index("botMatter = window.Matter"),
+        )
 
     def test_injected_hook_repairs_stale_partial_install_without_wrapping_twice(self):
         for function_name in (

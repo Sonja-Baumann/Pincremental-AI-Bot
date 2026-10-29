@@ -65,16 +65,19 @@ INSTALL_HOOK = r"""(function() {
     return { ready: true, installed: true };
   }
   if (document.readyState !== 'complete') return { ready: false, reason: 'page-loading' };
-  var botMatter = window.Matter;
-  var botJQuery = window.jQuery || window.$;
+  var botMatter = null;
+  var botJQuery = null;
   // Pincremental's Electron entry script imports both dependencies with
-  // require(), so some Chromium contexts do not expose them as window globals.
+  // require(). Prefer those exact module instances to avoid wrapping a CDN
+  // Matter.js copy that the Electron game itself is not using.
   if (typeof window.require === 'function') {
     try {
-      if (!botMatter) botMatter = window.require('matter-js');
-      if (!botJQuery) botJQuery = window.require('jquery');
+      botMatter = window.require('matter-js');
+      botJQuery = window.require('jquery');
     } catch (dependencyError) {}
   }
+  if (!botMatter) botMatter = window.Matter;
+  if (!botJQuery) botJQuery = window.jQuery || window.$;
   if (!botMatter || !botMatter.Engine || !botMatter.Engine.update || !botJQuery) {
     return { ready: false, unsupported: true, reason: 'Matter.js or jQuery missing' };
   }

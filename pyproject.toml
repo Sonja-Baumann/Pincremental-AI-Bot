@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pincremental-ai-bot"
+version = "0.1.0"
+description = "A local physics-driven flipper bot for Pincremental"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["websocket-client>=1.7"]
+
+[project.scripts]
+pincremental-ai-bot = "pincremental_bot:main"
+
+[tool.setuptools]
+py-modules = ["pincremental_bot"]
